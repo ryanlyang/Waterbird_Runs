@@ -16,7 +16,7 @@ LOG_DIR=/home/ryreu/guided_cnn/logsWaterbird
 mkdir -p "$LOG_DIR"
 
 source ~/miniconda3/etc/profile.d/conda.sh
-conda activate learntolook
+conda activate gals
 
 export TF_CPP_MIN_LOG_LEVEL=3
 export TF_ENABLE_ONEDNN_OPTS=0

@@ -217,7 +217,7 @@ class WaterbirdsMetadataDataset(Dataset):
 
 
 
-def compute_loss(outputs, labels, cams, gt_masks, kl_lambda, only_ce):
+def compute_loss(outputs, labels, cams, gt_masks, kl_lambda, only_attn):
     ce_loss = nn.functional.cross_entropy(outputs, labels)
     B, Hf, Wf = cams.shape
     cam_flat = cams.view(B, -1)
@@ -226,8 +226,8 @@ def compute_loss(outputs, labels, cams, gt_masks, kl_lambda, only_ce):
     gt_prob = gt_flat / (gt_flat.sum(dim=1, keepdim=True) + 1e-8)
     kl_div = nn.KLDivLoss(reduction='batchmean')
     attn_loss = kl_div(log_p, gt_prob)
-    if only_ce:
-        return ce_loss, attn_loss
+    if only_attn:
+        return attn_loss, attn_loss
     else:
         return ce_loss + kl_lambda * attn_loss, attn_loss
 
