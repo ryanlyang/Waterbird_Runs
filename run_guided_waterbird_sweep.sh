@@ -27,7 +27,7 @@ export PYTHONNOUSERSITE=1
 
 REPO_ROOT=/home/ryreu/guided_cnn/waterbirds/Waterbird_Runs
 DATA_ROOT=/home/ryreu/guided_cnn/waterbirds/waterbird_complete95_forest2water2
-GT_ROOT=/home/ryreu/guided_cnn/waterbirds/Waterbird_Runs/gt_masks
+GT_ROOT=/home/ryreu/guided_cnn/waterbirds/LearningToLook/code/WeCLIPPlus/results/val/prediction_cmap
 
 N_TRIALS=${N_TRIALS:-20}
 SWEEP_OUT=${SWEEP_OUT:-$LOG_DIR/guided_waterbird_sweep_${SLURM_JOB_ID}.csv}

@@ -64,7 +64,7 @@ def main():
     parser.add_argument("gt_path", help="Mask root (required by run_guided_waterbird.py)")
     parser.add_argument("--n-trials", type=int, default=20)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--output-csv", default="guided_waterbird_sweep.csv")
+    parser.add_argument("--output-csv", default="waterbird_invert_sweep.csv")
     parser.add_argument("--attn-min", type=int, default=0)
     parser.add_argument("--attn-max", type=int, default=rgw.num_epochs - 1)
     parser.add_argument("--kl-min", type=float, default=1.0)

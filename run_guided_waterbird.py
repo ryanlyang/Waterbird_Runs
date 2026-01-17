@@ -82,6 +82,13 @@ class Brighten(object):
 
 
 
+def mask_name_from_path(image_path):
+    folder = os.path.basename(os.path.dirname(image_path))
+    folder_prefix = folder.replace('.', '_')
+    base = os.path.splitext(os.path.basename(image_path))[0]
+    return f"{folder_prefix}_{base}.png"
+
+
 class LeNet(nn.Module):
     def __init__(self, num_classes):
         super().__init__()
@@ -153,8 +160,7 @@ class GuidedImageFolder(Dataset):
     def __getitem__(self, idx):
         img, label = self.images[idx]
         path, _ = self.images.samples[idx]
-        base = os.path.splitext(os.path.basename(path))[0]
-        mask_path = os.path.join(self.mask_root, base + ".png")
+        mask_path = os.path.join(self.mask_root, mask_name_from_path(path))
         mask = Image.open(mask_path).convert("L")
         if self.mask_transform:
             mask = self.mask_transform(mask)
@@ -199,8 +205,7 @@ class WaterbirdsMetadataDataset(Dataset):
         output = [img, label]
 
         if self.return_mask:
-            base = os.path.splitext(os.path.basename(path))[0]
-            mask_path = os.path.join(self.mask_root, base + ".png")
+            mask_path = os.path.join(self.mask_root, mask_name_from_path(path))
             mask = Image.open(mask_path).convert("L")
             if self.mask_transform:
                 mask = self.mask_transform(mask)
