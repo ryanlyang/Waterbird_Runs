@@ -25,7 +25,7 @@ export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export NUMEXPR_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export PYTHONNOUSERSITE=1
 
-REPO_ROOT=/home/ryreu/guided_cnn/waterbirds/LearningToLook/SwitchVLM/GALS
+REPO_ROOT=/home/ryreu/guided_cnn/waterbirds/Waterbird_Runs/GALS
 DATA_ROOT=/home/ryreu/guided_cnn/waterbirds
 DATA_DIR=waterbird_complete95_forest2water2
 
