@@ -2,6 +2,7 @@
 #SBATCH --account=reu-aisocial
 #SBATCH --partition=tier3
 #SBATCH --gres=gpu:1
+#SBATCH --constraint=volta
 #SBATCH --time=3-12:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=24
@@ -16,7 +17,7 @@ LOG_DIR=/home/ryreu/guided_cnn/logsWaterbird
 mkdir -p "$LOG_DIR"
 
 source ~/miniconda3/etc/profile.d/conda.sh
-conda activate gals
+conda activate gals_a100
 
 export TF_CPP_MIN_LOG_LEVEL=3
 export TF_ENABLE_ONEDNN_OPTS=0
