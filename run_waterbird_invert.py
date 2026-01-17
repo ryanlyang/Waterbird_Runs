@@ -569,6 +569,7 @@ def run_single(args, attn_epoch, kl_value):
 
 
 def main():
+    global base_lr, classifier_lr
     parser = argparse.ArgumentParser()
     parser.add_argument('data_path', help='Dataset root (expects metadata.csv or train/ and test/ subdirs)')
     parser.add_argument('gt_path', help='Folder with ground-truth mask PNGs (for train only)')
@@ -581,7 +582,6 @@ def main():
                         help='Run the full hyperparameter sweep (kl 100..300 step 20; attn 5..25 step 2)')
     args = parser.parse_args()
 
-    global base_lr, classifier_lr
     base_lr = args.base_lr
     classifier_lr = args.classifier_lr
 
