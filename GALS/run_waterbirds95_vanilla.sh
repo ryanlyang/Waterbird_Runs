@@ -2,7 +2,6 @@
 #SBATCH --account=reu-aisocial
 #SBATCH --partition=tier3
 #SBATCH --gres=gpu:1
-#SBATCH --constraint=volta
 #SBATCH --time=3-12:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=24
@@ -17,7 +16,27 @@ LOG_DIR=/home/ryreu/guided_cnn/logsWaterbird
 mkdir -p "$LOG_DIR"
 
 source ~/miniconda3/etc/profile.d/conda.sh
-conda activate gals_a100
+
+ENV_NAME=${ENV_NAME:-gals_a100}
+BOOTSTRAP_ENV=${BOOTSTRAP_ENV:-0}
+RECREATE_ENV=${RECREATE_ENV:-0}
+REQ_FILE=/home/ryreu/guided_cnn/waterbirds/Waterbird_Runs/GALS/requirements.txt
+
+if [[ "$BOOTSTRAP_ENV" -eq 1 ]]; then
+  if [[ "$RECREATE_ENV" -eq 1 ]]; then
+    conda env remove -n "$ENV_NAME" || true
+  fi
+  if ! conda env list | grep -E "^${ENV_NAME}[[:space:]]" >/dev/null; then
+    conda create -y -n "$ENV_NAME" python=3.8
+    conda activate "$ENV_NAME"
+    conda install -y pytorch==1.12.1 torchvision==0.13.1 cudatoolkit=11.3 -c pytorch -c nvidia -c conda-forge
+    pip install -r "$REQ_FILE" --no-deps
+    pip install opencv-python==4.6.0.66
+    conda deactivate
+  fi
+fi
+
+conda activate "$ENV_NAME"
 
 export TF_CPP_MIN_LOG_LEVEL=3
 export TF_ENABLE_ONEDNN_OPTS=0
