@@ -24,7 +24,7 @@ REQ_FILE=/home/ryreu/guided_cnn/waterbirds/Waterbird_Runs/GALS/requirements.txt
 
 if [[ "$BOOTSTRAP_ENV" -eq 1 ]]; then
   if [[ "$RECREATE_ENV" -eq 1 ]]; then
-    conda env remove -n "$ENV_NAME" || true
+    conda env remove -n "$ENV_NAME" -y || true
   fi
   if ! conda env list | grep -E "^${ENV_NAME}[[:space:]]" >/dev/null; then
     conda create -y -n "$ENV_NAME" python=3.8
