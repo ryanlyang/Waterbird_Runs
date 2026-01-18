@@ -30,7 +30,11 @@ if [[ "$BOOTSTRAP_ENV" -eq 1 ]]; then
     conda create -y -n "$ENV_NAME" python=3.8
     conda activate "$ENV_NAME"
     conda install -y pytorch==1.12.1 torchvision==0.13.1 cudatoolkit=11.3 -c pytorch -c nvidia -c conda-forge
-    pip install -r "$REQ_FILE" --no-deps
+    conda install -y -c conda-forge pycocotools
+    REQ_TMP=/tmp/${ENV_NAME}_reqs_$$.txt
+    grep -v -E '^(opencv-python|pycocotools)=' "$REQ_FILE" > "$REQ_TMP"
+    pip install -r "$REQ_TMP" --no-deps
+    rm -f "$REQ_TMP"
     pip install opencv-python==4.6.0.66 optuna
     conda deactivate
   fi
