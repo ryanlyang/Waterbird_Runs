@@ -1,7 +1,7 @@
 #!/bin/bash -l
 #SBATCH --account=reu-aisocial
 #SBATCH --partition=debug
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:a100:1
 #SBATCH --time=23:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=24

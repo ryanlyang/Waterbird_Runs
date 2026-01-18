@@ -1,7 +1,7 @@
 #!/bin/bash -l
 #SBATCH --account=reu-aisocial
 #SBATCH --partition=tier3
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:a100:1
 #SBATCH --time=4-00:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=24
@@ -45,6 +45,7 @@ conda activate "$ENV_NAME"
 
 export TF_CPP_MIN_LOG_LEVEL=3
 export TF_ENABLE_ONEDNN_OPTS=0
+export CUBLAS_WORKSPACE_CONFIG=:4096:8
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export NUMEXPR_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
