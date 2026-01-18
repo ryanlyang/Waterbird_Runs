@@ -1,8 +1,8 @@
 #!/bin/bash -l
 #SBATCH --account=reu-aisocial
-#SBATCH --partition=tier3
+#SBATCH --partition=debug
 #SBATCH --gres=gpu:1
-#SBATCH --time=3-12:00:00
+#SBATCH --time=23:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=24
 #SBATCH --mem=64G
@@ -32,9 +32,10 @@ if [[ "$BOOTSTRAP_ENV" -eq 1 ]]; then
     conda install -y pytorch==1.12.1 torchvision==0.13.1 cudatoolkit=11.3 -c pytorch -c nvidia -c conda-forge
     conda install -y -c conda-forge pycocotools
     REQ_TMP=/tmp/${ENV_NAME}_reqs_$$.txt
-    grep -v -E '^(opencv-python|pycocotools|torch|torchvision)=' "$REQ_FILE" > "$REQ_TMP"
+    grep -v -E '^(opencv-python|pycocotools|torch|torchvision|torchray)' "$REQ_FILE" > "$REQ_TMP"
     pip install -r "$REQ_TMP"
     rm -f "$REQ_TMP"
+    pip install torchray==1.0.0.2 --no-deps
     pip install opencv-python==4.6.0.66
     conda deactivate
   fi
