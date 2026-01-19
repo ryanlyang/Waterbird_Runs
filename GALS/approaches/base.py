@@ -295,6 +295,9 @@ class Base():
     def train(self):
         self.setup_train()
         gu.init_wandb(self.CFG)
+        use_wandb = wandb.run is not None
+        run_dir = wandb.run.dir if use_wandb else os.path.join('trained_weights', self.CFG.DATA.DATASET)
+        os.makedirs(run_dir, exist_ok=True)
 
         start_epoch = 0
 
@@ -306,7 +309,7 @@ class Base():
                 metric_names.append('{}_val_acc'.format(g))
         metrics = {name: gu.AverageMeter() for name in metric_names}
 
-        wandb.run.summary['best_val_acc'] = -1
+        best_val_acc = -1
 
         for epoch in range(start_epoch, self.CFG.EXP.NUM_EPOCHS):
             print('EPOCH: {}\n'.format(epoch))
@@ -337,7 +340,8 @@ class Base():
 
             for metric_name, metric_meter in metrics.items():
                 print('{}: {}'.format(metric_name, metric_meter.avg))
-                wandb.log({metric_name: metric_meter.avg}, step=epoch)
+                if use_wandb:
+                    wandb.log({metric_name: metric_meter.avg}, step=epoch)
 
             print('TRAIN ACC:        {}'.format(metrics['train_acc'].avg))
             print('VAL ACC:          {}'.format(metrics['val_acc'].avg))
@@ -348,7 +352,7 @@ class Base():
             if (self.CFG.LOGGING.SAVE_EVERY >= 1 and (epoch + 1) % self.CFG.LOGGING.SAVE_EVERY == 0) or \
                (self.CFG.LOGGING.SAVE_LAST and (epoch + 1) == self.CFG.EXP.NUM_EPOCHS):
                 save_path = os.path.join(
-                    wandb.run.dir,
+                    run_dir,
                     'epoch-{}-{}valacc-{}.ckpt'.format(
                         epoch,
                         'balanced-' if self.group_names is not None else '',
@@ -358,16 +362,18 @@ class Base():
                 #self.test_checkpoint = save_path
                 self.save_checkpoint(save_path, epoch, val_acc)
 
-            if val_acc > wandb.run.summary['best_val_acc']:
-                wandb.run.summary['best_val_acc'] = val_acc
-                wandb.run.summary['best_val_epoch'] = epoch
-                for cls in self.class_names:
-                    wandb.run.summary['best_val_{}'.format(cls)] = metrics['val_acc_{}'.format(cls)].avg
-            if self.CFG.LOGGING.SAVE_BEST and val_acc >= wandb.run.summary['best_val_acc']:
+            if val_acc > best_val_acc:
+                best_val_acc = val_acc
+                if use_wandb:
+                    wandb.run.summary['best_val_acc'] = val_acc
+                    wandb.run.summary['best_val_epoch'] = epoch
+                    for cls in self.class_names:
+                        wandb.run.summary['best_val_{}'.format(cls)] = metrics['val_acc_{}'.format(cls)].avg
+            if self.CFG.LOGGING.SAVE_BEST and val_acc >= best_val_acc:
                 # Delete file holding previous best model. Instead of having static filename for best model,
                 # we save the val_acc in the filename for convenience in understanding the run.
-                gu.del_prev_best_model_file(wandb.run.dir)
-                save_path = os.path.join(wandb.run.dir,
+                gu.del_prev_best_model_file(run_dir)
+                save_path = os.path.join(run_dir,
                                          'best_{}valacc_{}_epoch_{}.ckpt'.format(
                                              'balanced_' if self.group_names is not None else '',
                                              round(val_acc, 2), epoch)
@@ -548,4 +554,3 @@ class Base():
 
         print('BALANCED ACCS CHECKED FOR {}'.format(split.upper()))
         return
-
