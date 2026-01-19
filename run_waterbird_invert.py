@@ -539,7 +539,9 @@ def run_single(args, attn_epoch, kl_value):
 
     model = make_cam_model(num_classes, model_name="resnet50", pretrained=True).to(device)
 
-    os.makedirs(checkpoint_dir, exist_ok=True)
+    save_checkpoints = os.environ.get("SAVE_CHECKPOINTS", "1").lower() not in ("0", "false", "no", "n")
+    if save_checkpoints:
+        os.makedirs(checkpoint_dir, exist_ok=True)
 
     print(f"\n=== RUN: kl_lambda={kl_value}, attention_epoch={attn_epoch} ===", flush=True)
     best_model, best_score, best_epoch = train_model(
@@ -559,11 +561,15 @@ def run_single(args, attn_epoch, kl_value):
             print(f"[TEST] {name}: {acc:.2f}%")
         print(f"[TEST] Per Group: {per_group:.2f}%  Worst Group: {worst_group:.2f}%")
 
-    # Save best model (named with hyperparams)
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    save_name = f"resnet50_final_kl{int(kl_value)}_attn{attn_epoch}_{ts}.pth"
-    save_path = os.path.join(checkpoint_dir, save_name)
-    torch.save(best_model.state_dict(), save_path)
+    # Save best model (named with hyperparams) unless disabled.
+    if save_checkpoints:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        save_name = f"resnet50_final_kl{int(kl_value)}_attn{attn_epoch}_{ts}.pth"
+        save_path = os.path.join(checkpoint_dir, save_name)
+        torch.save(best_model.state_dict(), save_path)
+    else:
+        save_path = "NONE"
+        print("[RUN DONE] Checkpoint saving disabled via SAVE_CHECKPOINTS=0", flush=True)
 
     print(f"[RUN DONE] kl={kl_value} attn={attn_epoch} | best_balanced_val_acc={best_score:.4f} "
           f"| test_acc={test_acc:.2f}% | saved: {save_path}", flush=True)
