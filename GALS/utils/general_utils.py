@@ -79,6 +79,11 @@ def check_module_state_dict(original_state_dict, force_remove_module=False):
 
 
 def init_wandb(config):
+    wandb_disabled = os.environ.get('WANDB_DISABLED', '').lower() in ('1', 'true', 'yes', 'y')
+    wandb_mode = os.environ.get('WANDB_MODE', '').lower()
+    if wandb_disabled or wandb_mode == 'disabled':
+        print('WANDB DISABLED: skipping wandb.init()')
+        return
     flattened_config = flatten_config(config)
     if config.name is not None:
         os.environ['WANDB_RUN_ID'] = config.name
