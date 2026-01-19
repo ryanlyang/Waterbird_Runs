@@ -6,18 +6,23 @@ from PIL import Image
 from tqdm import tqdm
 from dataset_utils import crop_and_resize, combine_and_mask
 
+import random; random.seed(0); np.random.seed(0)
+
+
 ################ Paths and other configs - Set these #################################
-cub_dir = '/u/scr/nlp/CUB_200_2011'
-places_dir = '/u/scr/nlp/places365'
-output_dir = '/u/scr/nlp/dro/cub/data'
-dataset_name = 'waterbird_complete95_forest2water2'
+cub_dir = '/home/ryan/Documents/waterbird_data/CUB_200_2011'
+places_dir = '/home/ryan/Documents/waterbird_data'
+output_dir = '/home/ryan/Documents/waterbird_data'
+dataset_name = 'waterbird_1.0_forest2water2'
+confounder_strength = 1.0
+
 
 target_places = [
     ['bamboo_forest', 'forest/broadleaf'],  # Land backgrounds
     ['ocean', 'lake/natural']]              # Water backgrounds
 
 val_frac = 0.2             # What fraction of the training data to use as validation
-confounder_strength = 0.95 # Determines relative size of majority vs. minority groups
+# confounder_strength = 0.95 # Determines relative size of majority vs. minority groups
 ######################################################################################
 
 images_path = os.path.join(cub_dir, 'images.txt')
