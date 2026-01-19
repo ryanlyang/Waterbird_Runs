@@ -46,6 +46,7 @@ conda activate "$ENV_NAME"
 export TF_CPP_MIN_LOG_LEVEL=3
 export TF_ENABLE_ONEDNN_OPTS=0
 export CUBLAS_WORKSPACE_CONFIG=:4096:8
+export WANDB_DISABLED=true
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export NUMEXPR_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
@@ -53,7 +54,7 @@ export PYTHONNOUSERSITE=1
 
 REPO_ROOT=/home/ryreu/guided_cnn/waterbirds/Waterbird_Runs
 DATA_ROOT=/home/ryreu/guided_cnn/waterbirds/waterbird_1.0_forest2water2
-GT_ROOT=/home/ryreu/guided_cnn/waterbirds/LearningToLook/code/WeCLIPPlus/results/val/prediction_cmap
+GT_ROOT=/home/ryreu/guided_cnn/waterbirds/L100/LearningToLook/code/WeCLIPPlus/results/val/prediction_cmap
 
 N_TRIALS=${N_TRIALS:-200}
 SWEEP_OUT=${SWEEP_OUT:-$LOG_DIR/waterbird_invert_sweep_${SLURM_JOB_ID}.csv}
