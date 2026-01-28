@@ -12,7 +12,7 @@
 
 set -Eeuo pipefail
 
-LOG_DIR=/home/ryreu/guided_cnn/logsWaterbird
+LOG_DIR=/home/ryreu/guided_cnn/logsWaterbirdSeeds
 mkdir -p "$LOG_DIR"
 
 source ~/miniconda3/etc/profile.d/conda.sh
