@@ -434,7 +434,7 @@ def evaluate_test(model, test_loader):
 
 
 
-def run_single(args, attn_epoch, kl_value):
+def run_single(args, attn_epoch, kl_value, kl_increment=None):
     global device
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -544,11 +544,13 @@ def run_single(args, attn_epoch, kl_value):
         os.makedirs(checkpoint_dir, exist_ok=True)
 
     print(f"\n=== RUN: kl_lambda={kl_value}, attention_epoch={attn_epoch} ===", flush=True)
+    if kl_increment is None:
+        kl_increment = kl_value / 10
     best_model, best_score, best_epoch = train_model(
         model, dataloaders, dataset_sizes,
         attn_epoch, kl_value, num_epochs,
         base_lr=base_lr, classifier_lr=classifier_lr,
-        kl_incr=(kl_value / 10), use_attention=use_attention,
+        kl_incr=kl_increment, use_attention=use_attention,
         num_classes=num_classes
     )
     print(f"\n[VAL] Best Balanced Acc: {best_score:.4f} at epoch {best_epoch}")
@@ -571,7 +573,7 @@ def run_single(args, attn_epoch, kl_value):
         save_path = "NONE"
         print("[RUN DONE] Checkpoint saving disabled via SAVE_CHECKPOINTS=0", flush=True)
 
-    print(f"[RUN DONE] kl={kl_value} attn={attn_epoch} | best_balanced_val_acc={best_score:.4f} "
+    print(f"[RUN DONE] kl={kl_value} attn={attn_epoch} kl_incr={kl_increment} | best_balanced_val_acc={best_score:.4f} "
           f"| test_acc={test_acc:.2f}% | saved: {save_path}", flush=True)
     return best_score, test_acc, per_group, worst_group, save_path
 
@@ -586,6 +588,7 @@ def main():
     parser.add_argument('--attention_epoch', type=int, default=num_epochs,
                         help='Epoch at which to restart training (>= num_epochs disables attention)')
     parser.add_argument('--kl_lambda', type=float, default=0.0, help='Weight for attention KL loss')
+    parser.add_argument('--kl_increment', type=float, default=None, help='Increment added to KL each epoch after attention_epoch')
     parser.add_argument('--base_lr', type=float, default=base_lr, help='Base learning rate')
     parser.add_argument('--classifier_lr', type=float, default=classifier_lr, help='Classifier learning rate')
     parser.add_argument('--sweep', action='store_true',
@@ -597,7 +600,7 @@ def main():
     classifier_lr = args.classifier_lr
 
     if not args.sweep:
-        run_single(args, args.attention_epoch, args.kl_lambda)
+        run_single(args, args.attention_epoch, args.kl_lambda, args.kl_increment)
         return
 
     kl_values = list(range(100, 301, 20))
