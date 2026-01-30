@@ -578,10 +578,11 @@ def run_single(args, attn_epoch, kl_value):
 
 
 def main():
-    global base_lr, classifier_lr
+    global SEED, base_lr, classifier_lr
     parser = argparse.ArgumentParser()
     parser.add_argument('data_path', help='Dataset root (expects metadata.csv or train/ and test/ subdirs)')
     parser.add_argument('gt_path', help='Folder with ground-truth mask PNGs (for train only)')
+    parser.add_argument('--seed', type=int, default=SEED, help='Random seed')
     parser.add_argument('--attention_epoch', type=int, default=num_epochs,
                         help='Epoch at which to restart training (>= num_epochs disables attention)')
     parser.add_argument('--kl_lambda', type=float, default=0.0, help='Weight for attention KL loss')
@@ -591,6 +592,7 @@ def main():
                         help='Run the full hyperparameter sweep (kl 100..300 step 20; attn 5..25 step 2)')
     args = parser.parse_args()
 
+    SEED = args.seed
     base_lr = args.base_lr
     classifier_lr = args.classifier_lr
 
