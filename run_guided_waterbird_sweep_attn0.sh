@@ -59,6 +59,9 @@ GT_ROOT=/home/ryreu/guided_cnn/waterbirds/LearningToLook/code/WeCLIPPlus/results
 
 N_TRIALS=${N_TRIALS:-200}
 SWEEP_OUT=${SWEEP_OUT:-$LOG_DIR/guided_waterbird_sweep_attn0_${SLURM_JOB_ID}.csv}
+SEEDS_OUT=${SEEDS_OUT:-$LOG_DIR/guided_waterbird_sweep_attn0_seeds_${SLURM_JOB_ID}.csv}
+MAX_HOURS=${MAX_HOURS:-36}
+POST_SEEDS=${POST_SEEDS:-"0 1 2 3 4"}
 
 cd "$REPO_ROOT"
 export PYTHONPATH="$PWD:${PYTHONPATH:-}"
@@ -84,4 +87,7 @@ srun --unbuffered python -u run_guided_waterbird_sweep_attn0.py \
   "$DATA_ROOT" \
   "$GT_ROOT" \
   --n-trials "$N_TRIALS" \
-  --output-csv "$SWEEP_OUT"
+  --output-csv "$SWEEP_OUT" \
+  --max-hours "$MAX_HOURS" \
+  --post-seeds "$POST_SEEDS" \
+  --seeds-csv "$SEEDS_OUT"
