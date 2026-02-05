@@ -73,6 +73,7 @@ def run_one_trial(
     trial_id,
     *,
     run_name=None,
+    method="gals",
     config,
     data_root,
     waterbirds_dir,
@@ -80,15 +81,15 @@ def run_one_trial(
     train_seed,
     base_lr,
     classifier_lr,
-    grad_weight,
+    grad_weight=None,
+    abn_weight=None,
     weight_decay,
     python_exe,
     logs_dir,
     extra_overrides=None,
 ):
     if run_name is None:
-        run_name = f"gals_trial_{trial_id:03d}"
-    dataset_root = os.path.join(data_root, waterbirds_dir)
+        run_name = f"{method}_trial_{trial_id:03d}"
 
     cmd = [
         python_exe,
@@ -103,9 +104,21 @@ def run_one_trial(
         f"SEED={train_seed}",
         f"EXP.BASE.LR={base_lr}",
         f"EXP.CLASSIFIER.LR={classifier_lr}",
-        f"EXP.LOSSES.GRADIENT_OUTSIDE.WEIGHT={grad_weight}",
         f"EXP.WEIGHT_DECAY={weight_decay}",
     ]
+    if method == "gals":
+        if grad_weight is None:
+            raise ValueError("grad_weight must be provided when method='gals'")
+        cmd.append(f"EXP.LOSSES.GRADIENT_OUTSIDE.WEIGHT={grad_weight}")
+    elif method == "abn":
+        if abn_weight is None:
+            raise ValueError("abn_weight must be provided when method='abn'")
+        cmd.append(f"EXP.LOSSES.ABN_CLASSIFICATION.WEIGHT={abn_weight}")
+    elif method == "upweight":
+        pass
+    else:
+        raise ValueError(f"Unknown method: {method}")
+
     if extra_overrides:
         cmd.extend(list(extra_overrides))
 
@@ -172,10 +185,12 @@ def run_one_trial(
     return {
         "trial": trial_id,
         "name": run_name,
+        "method": method,
         "seed": train_seed,
         "base_lr": base_lr,
         "classifier_lr": classifier_lr,
         "grad_weight": grad_weight,
+        "abn_weight": abn_weight,
         "weight_decay": weight_decay,
         "best_balanced_val_acc": best_balanced_val,
         "test_acc": to_pct(test_metrics.get("test_acc")),
@@ -191,6 +206,7 @@ def run_one_trial(
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--method", choices=["gals", "upweight", "abn"], default="gals")
     parser.add_argument("--config", default="configs/waterbirds_95_gals.yaml")
     parser.add_argument("--data-root", required=True)
     parser.add_argument("--waterbirds-dir", default="waterbird_complete95_forest2water2")
@@ -220,6 +236,8 @@ def main():
 
     parser.add_argument("--weight-min", type=float, default=1.0)
     parser.add_argument("--weight-max", type=float, default=100000.0)
+    parser.add_argument("--abn-weight-min", type=float, default=0.1)
+    parser.add_argument("--abn-weight-max", type=float, default=10.0)
     parser.add_argument("--base-lr-min", type=float, default=1e-4)
     parser.add_argument("--base-lr-max", type=float, default=5e-2)
     parser.add_argument("--cls-lr-min", type=float, default=1e-5)
@@ -269,10 +287,12 @@ def main():
     header = [
         "trial",
         "name",
+        "method",
         "seed",
         "base_lr",
         "classifier_lr",
         "grad_weight",
+        "abn_weight",
         "weight_decay",
         "best_balanced_val_acc",
         "test_acc",
@@ -328,10 +348,11 @@ def main():
         if os.path.isdir(path):
             shutil.rmtree(path, ignore_errors=True)
 
-    def run_and_record(trial_id, base_lr, classifier_lr, grad_weight, weight_decay, sampler_name):
+    def run_and_record(trial_id, base_lr, classifier_lr, grad_weight, abn_weight, weight_decay, sampler_name):
         nonlocal best_row, best_dir
         row = run_one_trial(
             trial_id,
+            method=args.method,
             config=args.config,
             data_root=args.data_root,
             waterbirds_dir=args.waterbirds_dir,
@@ -340,6 +361,7 @@ def main():
             base_lr=base_lr,
             classifier_lr=classifier_lr,
             grad_weight=grad_weight,
+            abn_weight=abn_weight,
             weight_decay=weight_decay,
             python_exe=python_exe,
             logs_dir=args.logs_dir,
@@ -372,7 +394,6 @@ def main():
             if args.max_hours is not None and (time.time() - start_time) >= args.max_hours * 3600:
                 print(f"[SWEEP] Reached max-hours={args.max_hours}; stopping before trial {trial_id}.", flush=True)
                 break
-            grad_weight = loguniform(rng, args.weight_min, args.weight_max)
             base_lr = loguniform(rng, args.base_lr_min, args.base_lr_max)
             classifier_lr = loguniform(rng, args.cls_lr_min, args.cls_lr_max)
             weight_decay = (
@@ -380,8 +401,14 @@ def main():
                 if args.tune_weight_decay
                 else cfg_weight_decay
             )
+            grad_weight = None
+            abn_weight = None
+            if args.method == "gals":
+                grad_weight = loguniform(rng, args.weight_min, args.weight_max)
+            elif args.method == "abn":
+                abn_weight = loguniform(rng, args.abn_weight_min, args.abn_weight_max)
             try:
-                row = run_and_record(trial_id, base_lr, classifier_lr, grad_weight, weight_decay, "random")
+                row = run_and_record(trial_id, base_lr, classifier_lr, grad_weight, abn_weight, weight_decay, "random")
                 print(
                     f"[SWEEP] Trial {trial_id} done. best_balanced_val_acc={row['best_balanced_val_acc']}",
                     flush=True,
@@ -392,7 +419,6 @@ def main():
         import optuna
 
         def objective(trial):
-            grad_weight = float(trial.suggest_float("grad_weight", args.weight_min, args.weight_max, log=True))
             base_lr = float(trial.suggest_float("base_lr", args.base_lr_min, args.base_lr_max, log=True))
             classifier_lr = float(trial.suggest_float("classifier_lr", args.cls_lr_min, args.cls_lr_max, log=True))
             weight_decay = (
@@ -400,7 +426,14 @@ def main():
                 if args.tune_weight_decay
                 else cfg_weight_decay
             )
-            row = run_and_record(trial.number, base_lr, classifier_lr, grad_weight, weight_decay, "tpe")
+            grad_weight = None
+            abn_weight = None
+            if args.method == "gals":
+                grad_weight = float(trial.suggest_float("grad_weight", args.weight_min, args.weight_max, log=True))
+            elif args.method == "abn":
+                abn_weight = float(trial.suggest_float("abn_weight", args.abn_weight_min, args.abn_weight_max, log=True))
+
+            row = run_and_record(trial.number, base_lr, classifier_lr, grad_weight, abn_weight, weight_decay, "tpe")
             print(f"[SWEEP] Trial {trial.number} done. best_balanced_val_acc={row['best_balanced_val_acc']}", flush=True)
             return row["best_balanced_val_acc"] if row["best_balanced_val_acc"] is not None else -1.0
 
@@ -431,9 +464,11 @@ def main():
         post_header = [
             "seed",
             "name",
+            "method",
             "base_lr",
             "classifier_lr",
             "grad_weight",
+            "abn_weight",
             "weight_decay",
             "best_balanced_val_acc",
             "test_acc",
@@ -452,10 +487,11 @@ def main():
 
         post_rows = []
         for s in seeds:
-            run_name = f"gals_best_seed{s}"
+            run_name = f"{args.method}_best_seed{s}"
             row = run_one_trial(
                 100000 + s,
                 run_name=run_name,
+                method=args.method,
                 config=args.config,
                 data_root=args.data_root,
                 waterbirds_dir=args.waterbirds_dir,
@@ -463,7 +499,8 @@ def main():
                 train_seed=s,
                 base_lr=float(best_row["base_lr"]),
                 classifier_lr=float(best_row["classifier_lr"]),
-                grad_weight=float(best_row["grad_weight"]),
+                grad_weight=float(best_row["grad_weight"]) if best_row.get("grad_weight") is not None else None,
+                abn_weight=float(best_row["abn_weight"]) if best_row.get("abn_weight") is not None else None,
                 weight_decay=float(best_row["weight_decay"]),
                 python_exe=python_exe,
                 logs_dir=post_logs_dir,
@@ -476,9 +513,11 @@ def main():
             out_row = {
                 "seed": s,
                 "name": row.get("name"),
+                "method": row.get("method"),
                 "base_lr": row.get("base_lr"),
                 "classifier_lr": row.get("classifier_lr"),
                 "grad_weight": row.get("grad_weight"),
+                "abn_weight": row.get("abn_weight"),
                 "weight_decay": row.get("weight_decay"),
                 "best_balanced_val_acc": row.get("best_balanced_val_acc"),
                 "test_acc": row.get("test_acc"),
