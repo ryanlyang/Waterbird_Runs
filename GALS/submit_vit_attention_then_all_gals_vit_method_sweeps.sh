@@ -11,6 +11,7 @@ set -Eeuo pipefail
 #
 # Example:
 #   bash submit_vit_attention_then_all_gals_vit_method_sweeps.sh
+#   GEN_JOB_ID=21038942 bash submit_vit_attention_then_all_gals_vit_method_sweeps.sh
 #   FORCE_GEN=1 bash submit_vit_attention_then_all_gals_vit_method_sweeps.sh
 #   SKIP_GEN=1  bash submit_vit_attention_then_all_gals_vit_method_sweeps.sh
 
@@ -20,7 +21,9 @@ WB100_DIR=${WB100_DIR:-waterbird_1.0_forest2water2}
 ATT_DIR=${ATT_DIR:-clip_vit_attention}
 
 need_gen=0
-if [[ "${SKIP_GEN:-0}" -eq 1 ]]; then
+if [[ -n "${GEN_JOB_ID:-}" ]]; then
+  need_gen=0
+elif [[ "${SKIP_GEN:-0}" -eq 1 ]]; then
   need_gen=0
 elif [[ "${FORCE_GEN:-0}" -eq 1 ]]; then
   need_gen=1
@@ -30,7 +33,10 @@ else
 fi
 
 dep=()
-if [[ "$need_gen" -eq 1 ]]; then
+if [[ -n "${GEN_JOB_ID:-}" ]]; then
+  echo "[SUBMIT] Using existing generator job id: ${GEN_JOB_ID}"
+  dep=(--dependency="afterok:${GEN_JOB_ID}")
+elif [[ "$need_gen" -eq 1 ]]; then
   echo "[SUBMIT] ViT attention maps missing (or forced). Submitting generator..."
   gen_jid="$(sbatch --parsable run_generate_waterbirds_vit_attentions_95_100.sh)"
   echo "[SUBMIT] Generator job id: ${gen_jid}"
@@ -58,4 +64,3 @@ echo "  GradCAM WB95:${j_gc95}"
 echo "  GradCAM WB100:${j_gc100}"
 echo "  ABN WB95:    ${j_abn95}"
 echo "  ABN WB100:   ${j_abn100}"
-
