@@ -72,6 +72,7 @@ def _parse_metric_line(line):
 def run_one_trial(
     trial_id,
     *,
+    run_name=None,
     config,
     data_root,
     waterbirds_dir,
@@ -84,7 +85,8 @@ def run_one_trial(
     python_exe,
     logs_dir,
 ):
-    run_name = f"gals_trial_{trial_id:03d}"
+    if run_name is None:
+        run_name = f"gals_trial_{trial_id:03d}"
     dataset_root = os.path.join(data_root, waterbirds_dir)
 
     cmd = [
@@ -226,6 +228,34 @@ def main():
     )
     parser.add_argument("--weight-decay-min", type=float, default=1e-6)
     parser.add_argument("--weight-decay-max", type=float, default=1e-3)
+    parser.add_argument(
+        "--post-seeds",
+        type=int,
+        default=0,
+        help="After the sweep, rerun the best hyperparameters for N different seeds and write a second CSV.",
+    )
+    parser.add_argument(
+        "--post-seed-start",
+        type=int,
+        default=0,
+        help="Starting seed for post-sweep reruns (uses seeds post_seed_start..post_seed_start+post_seeds-1).",
+    )
+    parser.add_argument(
+        "--post-output-csv",
+        default=None,
+        help="CSV for post-sweep seed reruns (default: <output-csv basename>_best_seeds.csv).",
+    )
+    parser.add_argument(
+        "--post-logs-dir",
+        default=None,
+        help="Logs dir for post-sweep seed reruns (default: <logs-dir>_best_seeds).",
+    )
+    parser.add_argument(
+        "--post-keep",
+        choices=["all", "none"],
+        default="all",
+        help="What to keep for the post-sweep seed reruns under trained_weights/: all or none.",
+    )
     args = parser.parse_args()
 
     header = [
@@ -381,6 +411,103 @@ def main():
         for k in header:
             if k in best_row:
                 print(f"  {k}: {best_row[k]}", flush=True)
+
+    if best_row is not None and args.post_seeds > 0:
+        post_csv = args.post_output_csv
+        if post_csv is None:
+            root, ext = os.path.splitext(args.output_csv)
+            post_csv = f"{root}_best_seeds{ext or '.csv'}"
+        post_logs_dir = args.post_logs_dir or f"{args.logs_dir}_best_seeds"
+
+        post_header = [
+            "seed",
+            "name",
+            "base_lr",
+            "classifier_lr",
+            "grad_weight",
+            "weight_decay",
+            "best_balanced_val_acc",
+            "test_acc",
+            "balanced_test_acc",
+            "per_group",
+            "worst_group",
+            "checkpoint",
+            "log_path",
+            "seconds",
+            "run_dir",
+            "sweep_best_trial",
+        ]
+
+        seeds = list(range(args.post_seed_start, args.post_seed_start + args.post_seeds))
+        print(f"[POST] Rerunning best hyperparameters for {len(seeds)} seeds: {seeds}", flush=True)
+
+        post_rows = []
+        for s in seeds:
+            run_name = f"gals_best_seed{s}"
+            row = run_one_trial(
+                100000 + s,
+                run_name=run_name,
+                config=args.config,
+                data_root=args.data_root,
+                waterbirds_dir=args.waterbirds_dir,
+                dataset_name=dataset_name,
+                train_seed=s,
+                base_lr=float(best_row["base_lr"]),
+                classifier_lr=float(best_row["classifier_lr"]),
+                grad_weight=float(best_row["grad_weight"]),
+                weight_decay=float(best_row["weight_decay"]),
+                python_exe=python_exe,
+                logs_dir=post_logs_dir,
+            )
+
+            if args.post_keep == "none":
+                cleanup_run_dir(row.get("run_dir"))
+
+            out_row = {
+                "seed": s,
+                "name": row.get("name"),
+                "base_lr": row.get("base_lr"),
+                "classifier_lr": row.get("classifier_lr"),
+                "grad_weight": row.get("grad_weight"),
+                "weight_decay": row.get("weight_decay"),
+                "best_balanced_val_acc": row.get("best_balanced_val_acc"),
+                "test_acc": row.get("test_acc"),
+                "balanced_test_acc": row.get("balanced_test_acc"),
+                "per_group": row.get("per_group"),
+                "worst_group": row.get("worst_group"),
+                "checkpoint": row.get("checkpoint"),
+                "log_path": row.get("log_path"),
+                "seconds": row.get("seconds"),
+                "run_dir": row.get("run_dir"),
+                "sweep_best_trial": int(best_row["trial"]),
+            }
+            write_row(post_csv, out_row, post_header)
+            post_rows.append(out_row)
+            print(
+                f"[POST] seed={s} best_balanced_val_acc={out_row['best_balanced_val_acc']} "
+                f"per_group={out_row['per_group']} worst_group={out_row['worst_group']}",
+                flush=True,
+            )
+
+        def _mean_std(key):
+            vals = [r.get(key) for r in post_rows]
+            vals = [v for v in vals if v is not None]
+            if not vals:
+                return None, None
+            arr = np.array(vals, dtype=float)
+            return float(np.mean(arr)), float(np.std(arr))
+
+        m_pg, s_pg = _mean_std("per_group")
+        m_wg, s_wg = _mean_std("worst_group")
+        m_bte, s_bte = _mean_std("balanced_test_acc")
+        print("[POST] Summary over seeds:", flush=True)
+        if m_pg is not None:
+            print(f"  per_group: {m_pg:.2f} +/- {s_pg:.2f}", flush=True)
+        if m_wg is not None:
+            print(f"  worst_group: {m_wg:.2f} +/- {s_wg:.2f}", flush=True)
+        if m_bte is not None:
+            print(f"  balanced_test_acc: {m_bte:.2f} +/- {s_bte:.2f}", flush=True)
+        print(f"[POST] Wrote: {post_csv}", flush=True)
 
 
 if __name__ == "__main__":

@@ -63,6 +63,9 @@ SAMPLER=${SAMPLER:-tpe}
 KEEP=${KEEP:-best}
 MAX_HOURS=${MAX_HOURS:-}
 TUNE_WEIGHT_DECAY=${TUNE_WEIGHT_DECAY:-1}
+POST_SEEDS=${POST_SEEDS:-5}
+POST_SEED_START=${POST_SEED_START:-0}
+POST_KEEP=${POST_KEEP:-all}
 
 cd "$REPO_ROOT"
 export PYTHONPATH="$PWD:${PYTHONPATH:-}"
@@ -102,6 +105,9 @@ ARGS=(--config configs/waterbirds_100_gals.yaml
   --keep "$KEEP"
   --output-csv "$OUT_CSV"
   --logs-dir "$TRIAL_LOGS"
+  --post-seeds "$POST_SEEDS"
+  --post-seed-start "$POST_SEED_START"
+  --post-keep "$POST_KEEP"
 )
 
 if [[ "$TUNE_WEIGHT_DECAY" -eq 1 ]]; then
@@ -113,4 +119,3 @@ if [[ -n "${MAX_HOURS:-}" ]]; then
 fi
 
 srun --unbuffered python -u run_gals_sweep.py "${ARGS[@]}"
-
