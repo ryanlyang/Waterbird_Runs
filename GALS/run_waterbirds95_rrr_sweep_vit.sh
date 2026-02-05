@@ -1,6 +1,8 @@
 #!/bin/bash -l
-# ABN baseline sweep for Waterbirds-100.
-# Sweeps: EXP.BASE.LR, EXP.CLASSIFIER.LR, EXP.WEIGHT_DECAY, EXP.LOSSES.ABN_CLASSIFICATION.WEIGHT.
+# RRR (gradient-based) sweep for Waterbirds-95 using CLIP ViT attention maps.
+#
+# This is equivalent to the existing GALS "GRADIENT_OUTSIDE" setup, but labeled as RRR
+# to match the paper table terminology.
 
 #SBATCH --account=reu-aisocial
 #SBATCH --partition=tier3
@@ -9,8 +11,8 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=12
 #SBATCH --mem=64G
-#SBATCH --output=/home/ryreu/guided_cnn/logsWaterbird/waterbirds100_abn_sweep_%j.out
-#SBATCH --error=/home/ryreu/guided_cnn/logsWaterbird/waterbirds100_abn_sweep_%j.err
+#SBATCH --output=/home/ryreu/guided_cnn/logsWaterbird/waterbirds95_rrr_vit_sweep_%j.out
+#SBATCH --error=/home/ryreu/guided_cnn/logsWaterbird/waterbirds95_rrr_vit_sweep_%j.err
 #SBATCH --signal=TERM@120
 
 set -Eeuo pipefail
@@ -56,7 +58,8 @@ export PYTHONNOUSERSITE=1
 
 REPO_ROOT=/home/ryreu/guided_cnn/waterbirds/Waterbird_Runs/GALS
 DATA_ROOT=/home/ryreu/guided_cnn/waterbirds
-DATA_DIR=waterbird_1.0_forest2water2
+DATA_DIR=waterbird_complete95_forest2water2
+ATT_DIR=clip_vit_attention
 
 N_TRIALS=${N_TRIALS:-100}
 SWEEP_SEED=${SWEEP_SEED:-0}
@@ -64,12 +67,10 @@ TRAIN_SEED=${TRAIN_SEED:-0}
 SAMPLER=${SAMPLER:-tpe}
 KEEP=${KEEP:-best}
 MAX_HOURS=${MAX_HOURS:-}
+TUNE_WEIGHT_DECAY=${TUNE_WEIGHT_DECAY:-1}
 POST_SEEDS=${POST_SEEDS:-5}
 POST_SEED_START=${POST_SEED_START:-0}
 POST_KEEP=${POST_KEEP:-all}
-
-ABN_CLS_WEIGHT_MIN=${ABN_CLS_WEIGHT_MIN:-0.1}
-ABN_CLS_WEIGHT_MAX=${ABN_CLS_WEIGHT_MAX:-10.0}
 
 cd "$REPO_ROOT"
 export PYTHONPATH="$PWD:${PYTHONPATH:-}"
@@ -81,20 +82,25 @@ fi
 echo "[$(date)] Host: $(hostname)"
 echo "Repo: $REPO_ROOT"
 echo "Data: $DATA_ROOT/$DATA_DIR"
-echo "ABN_CLS_WEIGHT range: [$ABN_CLS_WEIGHT_MIN, $ABN_CLS_WEIGHT_MAX]"
-echo "Trials: $N_TRIALS (sampler=$SAMPLER sweep_seed=$SWEEP_SEED train_seed=$TRAIN_SEED keep=$KEEP max_hours=${MAX_HOURS:-NONE})"
+echo "Attention dir: $DATA_ROOT/$DATA_DIR/$ATT_DIR"
 which python
+
+if [[ ! -d "$DATA_ROOT/$DATA_DIR/$ATT_DIR" ]]; then
+  echo "[ERROR] Missing attention maps at: $DATA_ROOT/$DATA_DIR/$ATT_DIR" >&2
+  echo "Run: sbatch run_waterbirds95_extract_attention_vit.sh" >&2
+  exit 2
+fi
 
 python -c "import optuna" 2>/dev/null || {
   echo "[INFO] Installing optuna..."
   pip install -q optuna
 }
 
-OUT_CSV="$LOG_DIR/abn100_sweep_${SLURM_JOB_ID}.csv"
-TRIAL_LOGS="$LOG_DIR/abn100_sweep_logs_${SLURM_JOB_ID}"
+OUT_CSV="$LOG_DIR/rrr95_vit_sweep_${SLURM_JOB_ID}.csv"
+TRIAL_LOGS="$LOG_DIR/rrr95_vit_sweep_logs_${SLURM_JOB_ID}"
 
-ARGS=(--method abn_cls
-  --config configs/waterbirds_100_abn.yaml
+ARGS=(--method rrr
+  --config configs/waterbirds_95_gals_vit.yaml
   --data-root "$DATA_ROOT"
   --waterbirds-dir "$DATA_DIR"
   --n-trials "$N_TRIALS"
@@ -104,16 +110,17 @@ ARGS=(--method abn_cls
   --keep "$KEEP"
   --output-csv "$OUT_CSV"
   --logs-dir "$TRIAL_LOGS"
-  --tune-weight-decay
-  --abn-cls-weight-min "$ABN_CLS_WEIGHT_MIN"
-  --abn-cls-weight-max "$ABN_CLS_WEIGHT_MAX"
   --post-seeds "$POST_SEEDS"
   --post-seed-start "$POST_SEED_START"
   --post-keep "$POST_KEEP"
 )
 
+if [[ "$TUNE_WEIGHT_DECAY" -eq 1 ]]; then
+  ARGS+=(--tune-weight-decay)
+fi
 if [[ -n "${MAX_HOURS:-}" ]]; then
   ARGS+=(--max-hours "$MAX_HOURS")
 fi
 
 srun --unbuffered python -u run_gals_sweep.py "${ARGS[@]}"
+

@@ -82,7 +82,9 @@ def run_one_trial(
     base_lr,
     classifier_lr,
     grad_weight=None,
-    abn_weight=None,
+    cam_weight=None,
+    abn_cls_weight=None,
+    abn_att_weight=None,
     weight_decay,
     python_exe,
     logs_dir,
@@ -106,14 +108,22 @@ def run_one_trial(
         f"EXP.CLASSIFIER.LR={classifier_lr}",
         f"EXP.WEIGHT_DECAY={weight_decay}",
     ]
-    if method == "gals":
+    if method in ("gals", "rrr"):
         if grad_weight is None:
-            raise ValueError("grad_weight must be provided when method='gals'")
+            raise ValueError("grad_weight must be provided when method is gals/rrr")
         cmd.append(f"EXP.LOSSES.GRADIENT_OUTSIDE.WEIGHT={grad_weight}")
-    elif method == "abn":
-        if abn_weight is None:
-            raise ValueError("abn_weight must be provided when method='abn'")
-        cmd.append(f"EXP.LOSSES.ABN_CLASSIFICATION.WEIGHT={abn_weight}")
+    elif method == "gradcam":
+        if cam_weight is None:
+            raise ValueError("cam_weight must be provided when method='gradcam'")
+        cmd.append(f"EXP.LOSSES.GRADCAM.WEIGHT={cam_weight}")
+    elif method == "abn_cls":
+        if abn_cls_weight is None:
+            raise ValueError("abn_cls_weight must be provided when method='abn_cls'")
+        cmd.append(f"EXP.LOSSES.ABN_CLASSIFICATION.WEIGHT={abn_cls_weight}")
+    elif method == "abn_att":
+        if abn_att_weight is None:
+            raise ValueError("abn_att_weight must be provided when method='abn_att'")
+        cmd.append(f"EXP.LOSSES.ABN_SUPERVISION.WEIGHT={abn_att_weight}")
     elif method == "upweight":
         pass
     else:
@@ -190,7 +200,9 @@ def run_one_trial(
         "base_lr": base_lr,
         "classifier_lr": classifier_lr,
         "grad_weight": grad_weight,
-        "abn_weight": abn_weight,
+        "cam_weight": cam_weight,
+        "abn_cls_weight": abn_cls_weight,
+        "abn_att_weight": abn_att_weight,
         "weight_decay": weight_decay,
         "best_balanced_val_acc": best_balanced_val,
         "test_acc": to_pct(test_metrics.get("test_acc")),
@@ -206,7 +218,13 @@ def run_one_trial(
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--method", choices=["gals", "upweight", "abn"], default="gals")
+    parser.add_argument(
+        "--method",
+        choices=["gals", "rrr", "gradcam", "abn_cls", "abn_att", "upweight"],
+        default="gals",
+        help="Which 'classifier attention method' to sweep. gals/rrr=GRADIENT_OUTSIDE, gradcam=GRADCAM, "
+        "abn_cls=ABN_CLASSIFICATION, abn_att=ABN_SUPERVISION, upweight=no attention loss.",
+    )
     parser.add_argument("--config", default="configs/waterbirds_95_gals.yaml")
     parser.add_argument("--data-root", required=True)
     parser.add_argument("--waterbirds-dir", default="waterbird_complete95_forest2water2")
@@ -234,10 +252,14 @@ def main():
         help="Optional wallclock limit; stops launching new trials once exceeded",
     )
 
-    parser.add_argument("--weight-min", type=float, default=1.0)
-    parser.add_argument("--weight-max", type=float, default=100000.0)
-    parser.add_argument("--abn-weight-min", type=float, default=0.1)
-    parser.add_argument("--abn-weight-max", type=float, default=10.0)
+    parser.add_argument("--weight-min", type=float, default=1.0, help="Min for GRADIENT_OUTSIDE weight (gals/rrr)")
+    parser.add_argument("--weight-max", type=float, default=100000.0, help="Max for GRADIENT_OUTSIDE weight (gals/rrr)")
+    parser.add_argument("--cam-weight-min", type=float, default=0.1, help="Min for GRADCAM weight (gradcam)")
+    parser.add_argument("--cam-weight-max", type=float, default=100.0, help="Max for GRADCAM weight (gradcam)")
+    parser.add_argument("--abn-cls-weight-min", type=float, default=0.1, help="Min for ABN_CLASSIFICATION weight (abn_cls)")
+    parser.add_argument("--abn-cls-weight-max", type=float, default=10.0, help="Max for ABN_CLASSIFICATION weight (abn_cls)")
+    parser.add_argument("--abn-att-weight-min", type=float, default=0.1, help="Min for ABN_SUPERVISION weight (abn_att)")
+    parser.add_argument("--abn-att-weight-max", type=float, default=10.0, help="Max for ABN_SUPERVISION weight (abn_att)")
     parser.add_argument("--base-lr-min", type=float, default=1e-4)
     parser.add_argument("--base-lr-max", type=float, default=5e-2)
     parser.add_argument("--cls-lr-min", type=float, default=1e-5)
@@ -292,7 +314,9 @@ def main():
         "base_lr",
         "classifier_lr",
         "grad_weight",
-        "abn_weight",
+        "cam_weight",
+        "abn_cls_weight",
+        "abn_att_weight",
         "weight_decay",
         "best_balanced_val_acc",
         "test_acc",
@@ -348,7 +372,17 @@ def main():
         if os.path.isdir(path):
             shutil.rmtree(path, ignore_errors=True)
 
-    def run_and_record(trial_id, base_lr, classifier_lr, grad_weight, abn_weight, weight_decay, sampler_name):
+    def run_and_record(
+        trial_id,
+        base_lr,
+        classifier_lr,
+        grad_weight,
+        cam_weight,
+        abn_cls_weight,
+        abn_att_weight,
+        weight_decay,
+        sampler_name,
+    ):
         nonlocal best_row, best_dir
         row = run_one_trial(
             trial_id,
@@ -361,7 +395,9 @@ def main():
             base_lr=base_lr,
             classifier_lr=classifier_lr,
             grad_weight=grad_weight,
-            abn_weight=abn_weight,
+            cam_weight=cam_weight,
+            abn_cls_weight=abn_cls_weight,
+            abn_att_weight=abn_att_weight,
             weight_decay=weight_decay,
             python_exe=python_exe,
             logs_dir=args.logs_dir,
@@ -402,13 +438,29 @@ def main():
                 else cfg_weight_decay
             )
             grad_weight = None
-            abn_weight = None
-            if args.method == "gals":
+            cam_weight = None
+            abn_cls_weight = None
+            abn_att_weight = None
+            if args.method in ("gals", "rrr"):
                 grad_weight = loguniform(rng, args.weight_min, args.weight_max)
-            elif args.method == "abn":
-                abn_weight = loguniform(rng, args.abn_weight_min, args.abn_weight_max)
+            elif args.method == "gradcam":
+                cam_weight = loguniform(rng, args.cam_weight_min, args.cam_weight_max)
+            elif args.method == "abn_cls":
+                abn_cls_weight = loguniform(rng, args.abn_cls_weight_min, args.abn_cls_weight_max)
+            elif args.method == "abn_att":
+                abn_att_weight = loguniform(rng, args.abn_att_weight_min, args.abn_att_weight_max)
             try:
-                row = run_and_record(trial_id, base_lr, classifier_lr, grad_weight, abn_weight, weight_decay, "random")
+                row = run_and_record(
+                    trial_id,
+                    base_lr,
+                    classifier_lr,
+                    grad_weight,
+                    cam_weight,
+                    abn_cls_weight,
+                    abn_att_weight,
+                    weight_decay,
+                    "random",
+                )
                 print(
                     f"[SWEEP] Trial {trial_id} done. best_balanced_val_acc={row['best_balanced_val_acc']}",
                     flush=True,
@@ -427,13 +479,33 @@ def main():
                 else cfg_weight_decay
             )
             grad_weight = None
-            abn_weight = None
-            if args.method == "gals":
+            cam_weight = None
+            abn_cls_weight = None
+            abn_att_weight = None
+            if args.method in ("gals", "rrr"):
                 grad_weight = float(trial.suggest_float("grad_weight", args.weight_min, args.weight_max, log=True))
-            elif args.method == "abn":
-                abn_weight = float(trial.suggest_float("abn_weight", args.abn_weight_min, args.abn_weight_max, log=True))
+            elif args.method == "gradcam":
+                cam_weight = float(trial.suggest_float("cam_weight", args.cam_weight_min, args.cam_weight_max, log=True))
+            elif args.method == "abn_cls":
+                abn_cls_weight = float(
+                    trial.suggest_float("abn_cls_weight", args.abn_cls_weight_min, args.abn_cls_weight_max, log=True)
+                )
+            elif args.method == "abn_att":
+                abn_att_weight = float(
+                    trial.suggest_float("abn_att_weight", args.abn_att_weight_min, args.abn_att_weight_max, log=True)
+                )
 
-            row = run_and_record(trial.number, base_lr, classifier_lr, grad_weight, abn_weight, weight_decay, "tpe")
+            row = run_and_record(
+                trial.number,
+                base_lr,
+                classifier_lr,
+                grad_weight,
+                cam_weight,
+                abn_cls_weight,
+                abn_att_weight,
+                weight_decay,
+                "tpe",
+            )
             print(f"[SWEEP] Trial {trial.number} done. best_balanced_val_acc={row['best_balanced_val_acc']}", flush=True)
             return row["best_balanced_val_acc"] if row["best_balanced_val_acc"] is not None else -1.0
 
@@ -468,7 +540,9 @@ def main():
             "base_lr",
             "classifier_lr",
             "grad_weight",
-            "abn_weight",
+            "cam_weight",
+            "abn_cls_weight",
+            "abn_att_weight",
             "weight_decay",
             "best_balanced_val_acc",
             "test_acc",
@@ -500,7 +574,9 @@ def main():
                 base_lr=float(best_row["base_lr"]),
                 classifier_lr=float(best_row["classifier_lr"]),
                 grad_weight=float(best_row["grad_weight"]) if best_row.get("grad_weight") is not None else None,
-                abn_weight=float(best_row["abn_weight"]) if best_row.get("abn_weight") is not None else None,
+                cam_weight=float(best_row["cam_weight"]) if best_row.get("cam_weight") is not None else None,
+                abn_cls_weight=float(best_row["abn_cls_weight"]) if best_row.get("abn_cls_weight") is not None else None,
+                abn_att_weight=float(best_row["abn_att_weight"]) if best_row.get("abn_att_weight") is not None else None,
                 weight_decay=float(best_row["weight_decay"]),
                 python_exe=python_exe,
                 logs_dir=post_logs_dir,
@@ -517,7 +593,9 @@ def main():
                 "base_lr": row.get("base_lr"),
                 "classifier_lr": row.get("classifier_lr"),
                 "grad_weight": row.get("grad_weight"),
-                "abn_weight": row.get("abn_weight"),
+                "cam_weight": row.get("cam_weight"),
+                "abn_cls_weight": row.get("abn_cls_weight"),
+                "abn_att_weight": row.get("abn_att_weight"),
                 "weight_decay": row.get("weight_decay"),
                 "best_balanced_val_acc": row.get("best_balanced_val_acc"),
                 "test_acc": row.get("test_acc"),

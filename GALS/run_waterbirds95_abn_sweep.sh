@@ -68,8 +68,8 @@ POST_SEEDS=${POST_SEEDS:-5}
 POST_SEED_START=${POST_SEED_START:-0}
 POST_KEEP=${POST_KEEP:-all}
 
-ABN_WEIGHT_MIN=${ABN_WEIGHT_MIN:-0.1}
-ABN_WEIGHT_MAX=${ABN_WEIGHT_MAX:-10.0}
+ABN_CLS_WEIGHT_MIN=${ABN_CLS_WEIGHT_MIN:-0.1}
+ABN_CLS_WEIGHT_MAX=${ABN_CLS_WEIGHT_MAX:-10.0}
 
 cd "$REPO_ROOT"
 export PYTHONPATH="$PWD:${PYTHONPATH:-}"
@@ -81,7 +81,7 @@ fi
 echo "[$(date)] Host: $(hostname)"
 echo "Repo: $REPO_ROOT"
 echo "Data: $DATA_ROOT/$DATA_DIR"
-echo "ABN_WEIGHT range: [$ABN_WEIGHT_MIN, $ABN_WEIGHT_MAX]"
+echo "ABN_CLS_WEIGHT range: [$ABN_CLS_WEIGHT_MIN, $ABN_CLS_WEIGHT_MAX]"
 echo "Trials: $N_TRIALS (sampler=$SAMPLER sweep_seed=$SWEEP_SEED train_seed=$TRAIN_SEED keep=$KEEP max_hours=${MAX_HOURS:-NONE})"
 which python
 
@@ -93,7 +93,7 @@ python -c "import optuna" 2>/dev/null || {
 OUT_CSV="$LOG_DIR/abn95_sweep_${SLURM_JOB_ID}.csv"
 TRIAL_LOGS="$LOG_DIR/abn95_sweep_logs_${SLURM_JOB_ID}"
 
-ARGS=(--method abn
+ARGS=(--method abn_cls
   --config configs/waterbirds_95_abn.yaml
   --data-root "$DATA_ROOT"
   --waterbirds-dir "$DATA_DIR"
@@ -105,8 +105,8 @@ ARGS=(--method abn
   --output-csv "$OUT_CSV"
   --logs-dir "$TRIAL_LOGS"
   --tune-weight-decay
-  --abn-weight-min "$ABN_WEIGHT_MIN"
-  --abn-weight-max "$ABN_WEIGHT_MAX"
+  --abn-cls-weight-min "$ABN_CLS_WEIGHT_MIN"
+  --abn-cls-weight-max "$ABN_CLS_WEIGHT_MAX"
   --post-seeds "$POST_SEEDS"
   --post-seed-start "$POST_SEED_START"
   --post-keep "$POST_KEEP"
@@ -117,4 +117,3 @@ if [[ -n "${MAX_HOURS:-}" ]]; then
 fi
 
 srun --unbuffered python -u run_gals_sweep.py "${ARGS[@]}"
-
