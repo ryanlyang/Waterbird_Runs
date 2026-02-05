@@ -7,6 +7,7 @@ from torchvision import models
 import numpy as np
 import matplotlib.pyplot as plt
 import gc
+import time
 
 import utils.general_utils as gu
 import utils.loss_utils as lu
@@ -296,7 +297,13 @@ class Base():
         self.setup_train()
         gu.init_wandb(self.CFG)
         use_wandb = wandb.run is not None
-        run_dir = wandb.run.dir if use_wandb else os.path.join('trained_weights', self.CFG.DATA.DATASET)
+        if use_wandb:
+            run_dir = wandb.run.dir
+        else:
+            run_name = getattr(self.CFG, "name", None)
+            if run_name is None:
+                run_name = f"run_{int(time.time())}"
+            run_dir = os.path.join('trained_weights', self.CFG.DATA.DATASET, str(run_name))
         os.makedirs(run_dir, exist_ok=True)
 
         start_epoch = 0

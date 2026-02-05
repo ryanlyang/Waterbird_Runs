@@ -30,6 +30,10 @@ base_cfg  = OmegaConf.load('configs/base.yaml')
 args      = OmegaConf.merge(base_cfg, cfg, overrides)
 args.yaml = flags.config
 
+if hasattr(args, "LOGGING") and hasattr(args.LOGGING, "SAVE_STATS_PATH"):
+    if isinstance(args.LOGGING.SAVE_STATS_PATH, str) and args.LOGGING.SAVE_STATS_PATH.upper() == "NONE":
+        args.LOGGING.SAVE_STATS_PATH = None
+
 
 # reproducibility
 seed = args.SEED
@@ -199,4 +203,3 @@ def test(args, transform, approach, mean, std):
 
 if __name__ == '__main__':
     main(args)
-
