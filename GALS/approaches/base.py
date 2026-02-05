@@ -176,7 +176,7 @@ class Base():
             self.net = torch.nn.DataParallel(self.net)
         self.net.to(self.device)
 
-    def calc_loss(self, metrics, split, batch, inputs, output_dict, labels):
+    def calc_loss(self, metrics, split, batch, inputs, output_dict, labels, aux_losses=True):
         loss, metrics = lu.calc_loss(
             metrics=metrics,
             split=split,
@@ -186,7 +186,8 @@ class Base():
             labels=labels,
             cfg=self.CFG,
             loss_cfg=self.loss_cfg,
-            device=self.device
+            device=self.device,
+            aux_losses=aux_losses,
         )
         return loss, metrics
 
@@ -252,7 +253,15 @@ class Base():
         output_dict = self.forward(batch)
         inputs, labels = output_dict['inputs'], output_dict['labels']
         if mode == 'val':
-            loss, metrics = self.calc_loss(metrics, 'val', batch, inputs, output_dict, labels)
+            compute_aux_on_val = True
+            if hasattr(self.CFG, 'EXP') and hasattr(self.CFG.EXP, 'AUX_LOSSES_ON_VAL'):
+                compute_aux_on_val = bool(self.CFG.EXP.AUX_LOSSES_ON_VAL)
+            if compute_aux_on_val:
+                loss, metrics = self.calc_loss(metrics, 'val', batch, inputs, output_dict, labels, aux_losses=True)
+            else:
+                # classification-only loss on val (keeps val acc selection comparable to scripts that
+                # don't require masks on val)
+                loss, metrics = self.calc_loss(metrics, 'val', batch, inputs, output_dict, labels, aux_losses=False)
 
         _, _, preds = gu.calc_preds(
             output_dict['logits'],

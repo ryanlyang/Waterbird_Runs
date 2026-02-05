@@ -23,6 +23,7 @@ class Waterbirds(torch.utils.data.Dataset):
         self.return_attention = cfg.DATA.ATTENTION_DIR != "NONE"
         self.return_seg = self._should_return_seg()
         self.return_bbox = self._should_return_bbox()
+        self.segmentation_dir = self._get_segmentation_dir()
 
         print('WATERBIRDS DIR: {}'.format(self.root))
 
@@ -59,10 +60,7 @@ class Waterbirds(torch.utils.data.Dataset):
         }
 
         if self.return_seg:
-            self.seg_data = np.array([
-                os.path.join(root, 'CUB_200_2011/segmentations', path.replace('.jpg', '.png'))
-                for path in self.filename_array
-            ])
+            self.seg_data = np.array([self._seg_path_for_image(path) for path in self.filename_array])
         else:
             self.seg_data = None
 
@@ -177,8 +175,16 @@ class Waterbirds(torch.utils.data.Dataset):
 
         if self.return_seg:
             seg_path = self.seg_data[index]
-            seg = Image.open(seg_path)
+            if not os.path.exists(seg_path):
+                raise FileNotFoundError(
+                    f"Segmentation/mask file not found: {seg_path}\n"
+                    f"SEGMENTATION_DIR: {self.segmentation_dir}\n"
+                    "If you are using WeCLIPPlus masks, expected naming is like:\n"
+                    "  <folder>_<original_basename>.png (folder '.' replaced with '_')"
+                )
+            seg = Image.open(seg_path).convert('L')
             seg = self.seg_transform(seg)
+            seg = (seg > 0).float()
             if self.remove_background:
                 img = img * seg
         else:
@@ -212,12 +218,67 @@ class Waterbirds(torch.utils.data.Dataset):
         return False
 
     def _should_return_seg(self):
+        train_only = bool(getattr(self.cfg.DATA, 'SEG_TRAIN_ONLY', False))
+        if train_only and self.split != 'train':
+            # allow explicit opt-in for returning seg on non-train splits
+            return bool(getattr(self.cfg.DATA, 'RETURN_SEG', False)) or self.cfg.DATA.REMOVE_BACKGROUND
         return bool(getattr(self.cfg.DATA, 'RETURN_SEG', False)) or \
             self.cfg.DATA.REMOVE_BACKGROUND or self._loss_uses_gt('segmentation')
 
     def _should_return_bbox(self):
         return bool(getattr(self.cfg.DATA, 'RETURN_BBOX', False)) or \
             self._loss_uses_gt('bbox')
+
+    def _get_segmentation_dir(self):
+        """
+        Optional override to use custom segmentation/mask directory.
+        If not set, defaults to CUB_200_2011 segmentations under original root.
+
+        For WeCLIPPlus-style masks (flat dir), filenames are expected like:
+          <folder>_<original_basename>.png
+        where <folder> is the image's parent folder with '.' replaced by '_'.
+        """
+        seg_dir = getattr(self.cfg.DATA, 'SEGMENTATION_DIR', None)
+        if seg_dir is None:
+            seg_dir = "NONE"
+        if isinstance(seg_dir, str) and seg_dir.upper() != "NONE":
+            seg_dir = os.path.expanduser(seg_dir)
+            if not os.path.isabs(seg_dir):
+                seg_dir = os.path.join(self.original_root, seg_dir)
+            return seg_dir
+        return os.path.join(self.original_root, 'CUB_200_2011', 'segmentations')
+
+    def _weclip_mask_name(self, img_rel_path):
+        # img_rel_path like: "200.Common_Yellowthroat/Common_Yellowthroat_0071_190665.jpg"
+        img_rel_path = img_rel_path.strip().lstrip(os.sep)
+        parent = os.path.basename(os.path.dirname(img_rel_path))
+        base = os.path.splitext(os.path.basename(img_rel_path))[0]
+        parent = parent.replace('.', '_')
+        return f"{parent}_{base}.png"
+
+    def _seg_path_for_image(self, img_rel_path):
+        # If using custom SEGMENTATION_DIR, try a few likely conventions.
+        seg_dir = self.segmentation_dir
+
+        # Default (CUB segmentations): mirrors original structure under CUB_200_2011/segmentations
+        default_path = os.path.join(seg_dir, img_rel_path.replace('.jpg', '.png'))
+
+        # WeCLIPPlus prediction_cmap convention: flat directory with folder prefix
+        weclip_name = self._weclip_mask_name(img_rel_path)
+        flat_weclip_path = os.path.join(seg_dir, weclip_name)
+
+        # Also try: seg_dir/<folder>/<basename>.png and seg_dir/<folder_with_dots>/<basename>.png
+        parent_with_dots = os.path.basename(os.path.dirname(img_rel_path))
+        parent_underscored = parent_with_dots.replace('.', '_')
+        base = os.path.splitext(os.path.basename(img_rel_path))[0] + ".png"
+        nested1 = os.path.join(seg_dir, parent_underscored, base)
+        nested2 = os.path.join(seg_dir, parent_with_dots, base)
+
+        for candidate in (flat_weclip_path, nested1, nested2, default_path):
+            if os.path.exists(candidate):
+                return candidate
+        # Fall back to the most informative candidate.
+        return flat_weclip_path
 
 
 def get_loss_upweights(bias_fraction=0.95, mode='per_class'):
@@ -248,7 +309,5 @@ def get_loss_upweights(bias_fraction=0.95, mode='per_class'):
     weights = fracs / torch.max(fracs)
 
     return weights
-
-
 
 

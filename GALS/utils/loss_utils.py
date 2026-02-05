@@ -5,7 +5,7 @@ from torchvision import transforms
 from utils import general_utils as gu
 from utils import attention_utils as au
 
-def calc_loss(metrics, split, batch, inputs, output_dict, labels, cfg, loss_cfg, device):
+def calc_loss(metrics, split, batch, inputs, output_dict, labels, cfg, loss_cfg, device, aux_losses=True):
     loss = 0
 
     # Always compute classification loss
@@ -38,10 +38,12 @@ def calc_loss(metrics, split, batch, inputs, output_dict, labels, cfg, loss_cfg,
     else:
         dy_dx = None
 
-    for loss_name, loss_settings in cfg.EXP.LOSSES.items():
-        if loss_name == 'CLASSIFICATION':
-            continue
-        elif loss_settings['COMPUTE'] or loss_settings['LOG']:
+    if aux_losses:
+        for loss_name, loss_settings in cfg.EXP.LOSSES.items():
+            if loss_name == 'CLASSIFICATION':
+                continue
+            if not (loss_settings['COMPUTE'] or loss_settings['LOG']):
+                continue
 
             if loss_name == 'GRADIENT_OUTSIDE':
                 gt_attentions, valid_dy_dx = get_gt_pred_attentions(

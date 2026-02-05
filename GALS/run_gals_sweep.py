@@ -84,6 +84,7 @@ def run_one_trial(
     weight_decay,
     python_exe,
     logs_dir,
+    extra_overrides=None,
 ):
     if run_name is None:
         run_name = f"gals_trial_{trial_id:03d}"
@@ -105,6 +106,8 @@ def run_one_trial(
         f"EXP.LOSSES.GRADIENT_OUTSIDE.WEIGHT={grad_weight}",
         f"EXP.WEIGHT_DECAY={weight_decay}",
     ]
+    if extra_overrides:
+        cmd.extend(list(extra_overrides))
 
     os.makedirs(logs_dir, exist_ok=True)
     trial_log = os.path.join(logs_dir, f"{run_name}.log")
@@ -256,6 +259,11 @@ def main():
         default="all",
         help="What to keep for the post-sweep seed reruns under trained_weights/: all or none.",
     )
+    parser.add_argument(
+        "overrides",
+        nargs=argparse.REMAINDER,
+        help="Extra OmegaConf overrides passed through to main.py (e.g. DATA.SEGMENTATION_DIR=/path/to/masks).",
+    )
     args = parser.parse_args()
 
     header = [
@@ -335,6 +343,7 @@ def main():
             weight_decay=weight_decay,
             python_exe=python_exe,
             logs_dir=args.logs_dir,
+            extra_overrides=args.overrides,
         )
         row["sampler"] = sampler_name
         write_row(args.output_csv, row, header)
@@ -458,6 +467,7 @@ def main():
                 weight_decay=float(best_row["weight_decay"]),
                 python_exe=python_exe,
                 logs_dir=post_logs_dir,
+                extra_overrides=args.overrides,
             )
 
             if args.post_keep == "none":
