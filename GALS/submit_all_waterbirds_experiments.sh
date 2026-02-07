@@ -182,13 +182,13 @@ echo "===================="
 if [[ "${SKIP_OURMASKS:-0}" -ne 1 ]]; then
   echo "[SUBMIT] GALS ourmasks sweeps (no attention generation dependency)..."
   if [[ -d "$MASK95_DIR" ]]; then
-    j_our95="$(sbatch --parsable --export=ALL,MASK_DIR=\"$MASK95_DIR\" run_waterbirds95_gals_ourmasks_sweep.sh)"
+    j_our95="$(sbatch --parsable --export=ALL,MASK_DIR="$MASK95_DIR" run_waterbirds95_gals_ourmasks_sweep.sh)"
     echo "  ourmasks95: $j_our95"
   else
     echo "  [WARN] MASK95_DIR missing: $MASK95_DIR (skipping WB95 ourmasks)"
   fi
   if [[ -d "$MASK100_DIR" ]]; then
-    j_our100="$(sbatch --parsable --export=ALL,MASK_DIR=\"$MASK100_DIR\" run_waterbirds100_gals_ourmasks_sweep.sh)"
+    j_our100="$(sbatch --parsable --export=ALL,MASK_DIR="$MASK100_DIR" run_waterbirds100_gals_ourmasks_sweep.sh)"
     echo "  ourmasks100: $j_our100"
   else
     echo "  [WARN] MASK100_DIR missing: $MASK100_DIR (skipping WB100 ourmasks)"
@@ -215,4 +215,3 @@ else
 fi
 
 echo "[SUBMIT] Done."
-

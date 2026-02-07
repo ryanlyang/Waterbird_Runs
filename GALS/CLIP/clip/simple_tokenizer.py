@@ -2,6 +2,8 @@ import gzip
 import html
 import os
 from functools import lru_cache
+from typing import Optional
+from urllib.request import urlopen
 
 import ftfy
 import regex as re
@@ -10,6 +12,46 @@ import regex as re
 @lru_cache()
 def default_bpe():
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "bpe_simple_vocab_16e6.txt.gz")
+
+def _ensure_bpe_vocab_exists(bpe_path: str) -> None:
+    """
+    Ensure `bpe_simple_vocab_16e6.txt.gz` exists.
+
+    Some copies of the CLIP tokenizer repo omit the vocab file; in that case we try to
+    download it from the official OpenAI CLIP repository.
+    """
+    if os.path.exists(bpe_path):
+        return
+
+    os.makedirs(os.path.dirname(os.path.abspath(bpe_path)), exist_ok=True)
+
+    urls = [
+        # Official OpenAI CLIP repo
+        "https://raw.githubusercontent.com/openai/CLIP/main/clip/bpe_simple_vocab_16e6.txt.gz",
+    ]
+
+    last_exc: Optional[Exception] = None
+    for url in urls:
+        try:
+            with urlopen(url, timeout=60) as r:
+                data = r.read()
+            tmp_path = f"{bpe_path}.tmp.{os.getpid()}"
+            with open(tmp_path, "wb") as f:
+                f.write(data)
+            os.replace(tmp_path, bpe_path)
+            return
+        except Exception as exc:  # pragma: no cover
+            last_exc = exc
+
+    raise FileNotFoundError(
+        "Missing CLIP BPE vocabulary file:\n"
+        f"  {bpe_path}\n"
+        "Tried to download it automatically but failed.\n"
+        "Fix by either:\n"
+        "  1) ensuring the compute node has outbound internet, OR\n"
+        "  2) manually downloading `bpe_simple_vocab_16e6.txt.gz` from the OpenAI CLIP repo and placing it there.\n"
+        f"Last error: {last_exc}"
+    )
 
 
 @lru_cache()
@@ -63,6 +105,7 @@ class SimpleTokenizer(object):
     def __init__(self, bpe_path: str = default_bpe()):
         self.byte_encoder = bytes_to_unicode()
         self.byte_decoder = {v: k for k, v in self.byte_encoder.items()}
+        _ensure_bpe_vocab_exists(bpe_path)
         merges = gzip.open(bpe_path).read().decode("utf-8").split('\n')
         merges = merges[1:49152-256-2+1]
         merges = [tuple(merge.split()) for merge in merges]

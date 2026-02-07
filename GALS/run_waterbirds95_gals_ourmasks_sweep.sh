@@ -57,6 +57,11 @@ DATA_DIR=waterbird_complete95_forest2water2
 
 # Your binary masks (black/red) directory:
 MASK_DIR=${MASK_DIR:-/home/ryreu/guided_cnn/waterbirds/LearningToLook/code/WeCLIPPlus/results/val/prediction_cmap}
+# Be robust if MASK_DIR accidentally includes surrounding quotes (common with --export usage).
+MASK_DIR="${MASK_DIR%\"}"
+MASK_DIR="${MASK_DIR#\"}"
+MASK_DIR="${MASK_DIR%\'}"
+MASK_DIR="${MASK_DIR#\'}"
 
 N_TRIALS=${N_TRIALS:-100}
 SWEEP_SEED=${SWEEP_SEED:-0}
@@ -121,4 +126,3 @@ fi
 
 srun --unbuffered python -u run_gals_sweep.py "${ARGS[@]}" \
   DATA.SEGMENTATION_DIR="$MASK_DIR"
-

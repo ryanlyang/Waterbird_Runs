@@ -1,8 +1,8 @@
 #!/bin/bash -l
 #SBATCH --account=reu-aisocial
-#SBATCH --partition=tier3
+#SBATCH --partition=debug
 #SBATCH --gres=gpu:a100:1
-#SBATCH --time=2-12:00:00
+#SBATCH --time=0-23:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=12
 #SBATCH --mem=64G
@@ -93,4 +93,3 @@ srun --unbuffered python -u extract_attention.py \
   DATA.WATERBIRDS_DIR="$WB100_DIR"
 
 echo "[GEN] Done."
-
