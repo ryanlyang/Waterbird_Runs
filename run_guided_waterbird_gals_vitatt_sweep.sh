@@ -2,7 +2,7 @@
 #SBATCH --account=reu-aisocial
 #SBATCH --partition=tier3
 #SBATCH --gres=gpu:a100:1
-#SBATCH --time=4-00:00:00
+#SBATCH --time=2-20:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=24
 #SBATCH --mem=64G
@@ -85,4 +85,3 @@ srun --unbuffered python -u run_guided_waterbird_gals_vitatt_sweep.py \
   "$ATT_ROOT" \
   --n-trials "$N_TRIALS" \
   --output-csv "$SWEEP_OUT"
-

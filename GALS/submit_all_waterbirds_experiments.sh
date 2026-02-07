@@ -3,14 +3,12 @@ set -Eeuo pipefail
 
 # Submit *all* Waterbirds jobs we set up, with correct Slurm dependencies.
 #
-# What it submits (unless skipped via env vars):
-# - ViT attention generation for WB95+WB100 (one job)
-# - RN50 GradCAM attention generation for WB95 and WB100 (two jobs)
-# - Dependent sweeps:
-#   - GALS/rrr (RN50) sweeps (95/100) depend on the corresponding RN50 attention job
-#   - GALS/rrr (ViT), GALS/GradCAM (ViT), GALS/ABN (ViT) sweeps depend on the ViT attention job
-#   - Guided strategy sweeps using GALS ViT attentions depend on the ViT attention job
-# - Independent sweeps (no dependencies):
+# What it submits:
+# - Sweeps (optionally with dependencies if you provide generator job ids):
+#   - GALS/rrr (RN50) sweeps (95/100) can depend on the corresponding RN50 attention job
+#   - GALS/rrr (ViT), GALS/GradCAM (ViT), GALS/ABN (ViT) sweeps can depend on the ViT attention job
+#   - Guided strategy sweeps using GALS ViT attentions can depend on the ViT attention job
+# - Independent sweeps:
 #   - GALS "ourmasks" sweeps (95/100) [depends on MASK_DIRs existing, but no job dependency]
 #   - UpWeight sweeps (95/100)
 #   - ABN baseline sweeps (95/100) (requires ABN weight file to exist on RC)
@@ -18,13 +16,12 @@ set -Eeuo pipefail
 # Run from the `GALS/` folder on RC:
 #   bash submit_all_waterbirds_experiments.sh
 #
-# Use existing generator job ids (recommended if you already submitted them):
+# Use existing generator job ids (recommended):
 #   VIT_JOB_ID=21038942 bash submit_all_waterbirds_experiments.sh
 #   RN50_95_JOB_ID=... RN50_100_JOB_ID=... bash submit_all_waterbirds_experiments.sh
+#   (This script will NOT submit attention generation jobs.)
 #
 # Skips:
-#   SKIP_VIT_GEN=1   (do not submit ViT generation; must provide VIT_JOB_ID or already have dirs)
-#   SKIP_RN50_GEN=1  (do not submit RN50 generation; must provide RN50_95_JOB_ID/RN50_100_JOB_ID or already have dirs)
 #   SKIP_GUIDED=1
 #   SKIP_VIT_METHODS=1 (RRR/GradCAM/ABN ViT sweeps)
 #   SKIP_RN50_SWEEPS=1
@@ -69,54 +66,37 @@ maybe_dep() {
   fi
 }
 
-echo "===================="
-echo "[SUBMIT] Stage 1: attention generation"
-echo "===================="
-
 VIT_JOB_ID=${VIT_JOB_ID:-}
 RN50_95_JOB_ID=${RN50_95_JOB_ID:-}
 RN50_100_JOB_ID=${RN50_100_JOB_ID:-}
-
-if [[ -z "$VIT_JOB_ID" && "${SKIP_VIT_GEN:-0}" -ne 1 ]]; then
-  if [[ -d "${DATA_ROOT}/${WB95_DIR}/${VIT_ATT_DIR}" && -d "${DATA_ROOT}/${WB100_DIR}/${VIT_ATT_DIR}" ]]; then
-    echo "[SUBMIT] ViT attention dirs already exist; not submitting generator."
-  else
-    echo "[SUBMIT] Submitting ViT generator (WB95+WB100)..."
-    VIT_JOB_ID="$(submit_parsable run_generate_waterbirds_vit_attentions_95_100.sh)"
-    echo "[SUBMIT] VIT_JOB_ID=$VIT_JOB_ID"
-  fi
-elif [[ -n "$VIT_JOB_ID" ]]; then
-  echo "[SUBMIT] Using existing VIT_JOB_ID=$VIT_JOB_ID"
+if [[ -n "$VIT_JOB_ID" ]]; then
+  echo "[SUBMIT] Using existing VIT_JOB_ID=$VIT_JOB_ID (for dependencies)"
 else
-  echo "[SUBMIT] SKIP_VIT_GEN=1 (not submitting ViT generator)"
+  if [[ ! -d "${DATA_ROOT}/${WB95_DIR}/${VIT_ATT_DIR}" || ! -d "${DATA_ROOT}/${WB100_DIR}/${VIT_ATT_DIR}" ]]; then
+    echo "[WARN] ViT attention dirs not found under datasets; ViT-dependent sweeps may fail." >&2
+    echo "       Expected: ${DATA_ROOT}/${WB95_DIR}/${VIT_ATT_DIR} and ${DATA_ROOT}/${WB100_DIR}/${VIT_ATT_DIR}" >&2
+    echo "       Provide VIT_JOB_ID=... to add dependencies, or generate attentions first." >&2
+  fi
 fi
 
-if [[ -z "$RN50_95_JOB_ID" && "${SKIP_RN50_GEN:-0}" -ne 1 ]]; then
-  if [[ -d "${DATA_ROOT}/${WB95_DIR}/${RN50_ATT_DIR}" ]]; then
-    echo "[SUBMIT] RN50 attention dir exists for WB95; not submitting."
-  else
-    echo "[SUBMIT] Submitting RN50 GradCAM attention generation (WB95)..."
-    RN50_95_JOB_ID="$(submit_parsable run_waterbirds95_extract_attention.sh)"
-    echo "[SUBMIT] RN50_95_JOB_ID=$RN50_95_JOB_ID"
-  fi
-elif [[ -n "$RN50_95_JOB_ID" ]]; then
-  echo "[SUBMIT] Using existing RN50_95_JOB_ID=$RN50_95_JOB_ID"
+if [[ -n "$RN50_95_JOB_ID" ]]; then
+  echo "[SUBMIT] Using existing RN50_95_JOB_ID=$RN50_95_JOB_ID (for dependencies)"
 else
-  echo "[SUBMIT] SKIP_RN50_GEN=1 (not submitting RN50 WB95 generator)"
+  if [[ ! -d "${DATA_ROOT}/${WB95_DIR}/${RN50_ATT_DIR}" ]]; then
+    echo "[WARN] RN50 attention dir not found for WB95; RN50-dependent sweeps may fail." >&2
+    echo "       Expected: ${DATA_ROOT}/${WB95_DIR}/${RN50_ATT_DIR}" >&2
+    echo "       Provide RN50_95_JOB_ID=... to add dependencies, or generate attentions first." >&2
+  fi
 fi
 
-if [[ -z "$RN50_100_JOB_ID" && "${SKIP_RN50_GEN:-0}" -ne 1 ]]; then
-  if [[ -d "${DATA_ROOT}/${WB100_DIR}/${RN50_ATT_DIR}" ]]; then
-    echo "[SUBMIT] RN50 attention dir exists for WB100; not submitting."
-  else
-    echo "[SUBMIT] Submitting RN50 GradCAM attention generation (WB100)..."
-    RN50_100_JOB_ID="$(submit_parsable run_waterbirds100_extract_attention.sh)"
-    echo "[SUBMIT] RN50_100_JOB_ID=$RN50_100_JOB_ID"
-  fi
-elif [[ -n "$RN50_100_JOB_ID" ]]; then
-  echo "[SUBMIT] Using existing RN50_100_JOB_ID=$RN50_100_JOB_ID"
+if [[ -n "$RN50_100_JOB_ID" ]]; then
+  echo "[SUBMIT] Using existing RN50_100_JOB_ID=$RN50_100_JOB_ID (for dependencies)"
 else
-  echo "[SUBMIT] SKIP_RN50_GEN=1 (not submitting RN50 WB100 generator)"
+  if [[ ! -d "${DATA_ROOT}/${WB100_DIR}/${RN50_ATT_DIR}" ]]; then
+    echo "[WARN] RN50 attention dir not found for WB100; RN50-dependent sweeps may fail." >&2
+    echo "       Expected: ${DATA_ROOT}/${WB100_DIR}/${RN50_ATT_DIR}" >&2
+    echo "       Provide RN50_100_JOB_ID=... to add dependencies, or generate attentions first." >&2
+  fi
 fi
 
 echo "===================="
