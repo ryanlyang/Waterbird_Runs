@@ -1,0 +1,400 @@
+#!/usr/bin/env python3
+import argparse
+import csv
+import os
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, Iterable, Optional, Tuple
+
+import numpy as np
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parent
+
+
+def _add_repo_to_syspath():
+    root = str(_repo_root())
+    if root not in sys.path:
+        sys.path.insert(0, root)
+
+
+def _try_import_clip():
+    # Prefer the pip package "clip" (openai/CLIP). Fall back to the local copy.
+    try:
+        import clip  # type: ignore
+
+        return clip
+    except Exception:
+        _add_repo_to_syspath()
+        from CLIP.clip import clip  # type: ignore
+
+        return clip
+
+
+def _write_row(csv_path: str, row: Dict, header: Iterable[str]) -> None:
+    file_exists = os.path.exists(csv_path)
+    with open(csv_path, "a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(header))
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(row)
+
+
+def _l2_normalize(x: np.ndarray, eps: float = 1e-12) -> np.ndarray:
+    denom = np.linalg.norm(x, axis=1, keepdims=True)
+    denom = np.maximum(denom, eps)
+    return x / denom
+
+
+def _group_acc(y_true: np.ndarray, y_pred: np.ndarray, groups: np.ndarray, num_groups: int = 4) -> np.ndarray:
+    accs = np.zeros((num_groups,), dtype=np.float64)
+    for g in range(num_groups):
+        idx = np.where(groups == g)[0]
+        if idx.size == 0:
+            accs[g] = float("nan")
+            continue
+        accs[g] = float(np.mean((y_true[idx] == y_pred[idx]).astype(np.float64)) * 100.0)
+    return accs
+
+
+def _nanmean(x: np.ndarray) -> float:
+    return float(np.nanmean(x))
+
+
+def _nanmin(x: np.ndarray) -> float:
+    return float(np.nanmin(x))
+
+
+def _split_root_and_dir(dataset_path: str) -> Tuple[str, str]:
+    p = Path(dataset_path).expanduser().resolve()
+    if (p / "metadata.csv").exists():
+        return str(p.parent), p.name
+    raise FileNotFoundError(f"Expected Waterbirds dataset dir containing metadata.csv, got: {p}")
+
+
+@dataclass(frozen=True)
+class _CfgData:
+    WATERBIRDS_DIR: str
+    SIZE: int = 224
+    REMOVE_BACKGROUND: bool = False
+    ATTENTION_DIR: str = "NONE"
+
+
+@dataclass(frozen=True)
+class _Cfg:
+    DATA: _CfgData
+
+
+def _load_waterbirds(dataset_path: str):
+    _add_repo_to_syspath()
+    from datasets.waterbirds import Waterbirds  # type: ignore
+
+    root, waterbirds_dir = _split_root_and_dir(dataset_path)
+    cfg = _Cfg(DATA=_CfgData(WATERBIRDS_DIR=waterbirds_dir))
+    return root, cfg, Waterbirds
+
+
+def _extract_features(
+    dataset,
+    model,
+    device: str,
+    batch_size: int,
+    num_workers: int,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    import torch
+    from torch.utils.data import DataLoader
+
+    loader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=("cuda" in device),
+    )
+
+    feats = []
+    labels = []
+    groups = []
+    model.eval()
+    with torch.no_grad():
+        for batch in loader:
+            images = batch["image"].to(device, non_blocking=True)
+            out = model.encode_image(images)
+            out = out.float()
+            out = out / out.norm(dim=-1, keepdim=True)
+            feats.append(out.cpu().numpy())
+
+            labels.append(batch["label"].cpu().numpy())
+            # batch["group"] is shape (B,1)
+            g = batch["group"].cpu().numpy()
+            if g.ndim == 2 and g.shape[1] == 1:
+                g = g[:, 0]
+            groups.append(g)
+
+    X = np.concatenate(feats, axis=0).astype(np.float32)
+    y = np.concatenate(labels, axis=0).astype(np.int64)
+    grp = np.concatenate(groups, axis=0).astype(np.int64)
+    return X, y, grp
+
+
+def _suggest_penalty_solver(trial) -> Tuple[str, str, Optional[float]]:
+    # Keep the search space small and valid for sklearn LogisticRegression.
+    choices = [
+        ("l2", "lbfgs", None),
+        ("l2", "liblinear", None),
+        ("l2", "saga", None),
+        ("l1", "liblinear", None),
+        ("l1", "saga", None),
+        ("elasticnet", "saga", "suggest"),
+    ]
+    penalty, solver, l1_ratio = trial.suggest_categorical("penalty_solver", choices)
+    if l1_ratio == "suggest":
+        l1_ratio = float(trial.suggest_float("l1_ratio", 0.05, 0.95))
+    return str(penalty), str(solver), l1_ratio
+
+
+def _sample_penalty_solver_random(rng: np.random.Generator) -> Tuple[str, str, Optional[float]]:
+    choices = [
+        ("l2", "lbfgs", None),
+        ("l2", "liblinear", None),
+        ("l2", "saga", None),
+        ("l1", "liblinear", None),
+        ("l1", "saga", None),
+        ("elasticnet", "saga", "suggest"),
+    ]
+    penalty, solver, l1_ratio = choices[int(rng.integers(0, len(choices)))]
+    if l1_ratio == "suggest":
+        l1_ratio = float(rng.uniform(0.05, 0.95))
+    return penalty, solver, l1_ratio
+
+
+def _run_trial(
+    trial_id: int,
+    sampler: str,
+    rng: np.random.Generator,
+    args,
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    X_val: np.ndarray,
+    y_val: np.ndarray,
+    g_val: np.ndarray,
+    X_test: np.ndarray,
+    y_test: np.ndarray,
+    g_test: np.ndarray,
+):
+    from sklearn.linear_model import LogisticRegression
+
+    if sampler == "random":
+        C = float(np.exp(rng.uniform(np.log(args.C_min), np.log(args.C_max))))
+        fit_intercept = bool(rng.integers(0, 2))
+        penalty, solver, l1_ratio = _sample_penalty_solver_random(rng)
+    else:
+        C = float(args.trial.suggest_float("C", args.C_min, args.C_max, log=True))
+        fit_intercept = bool(args.trial.suggest_categorical("fit_intercept", [True, False]))
+        penalty, solver, l1_ratio = _suggest_penalty_solver(args.trial)
+
+    clf_kwargs = dict(
+        random_state=args.seed,
+        C=C,
+        penalty=penalty,
+        solver=solver,
+        fit_intercept=fit_intercept,
+        max_iter=args.max_iter,
+        verbose=0,
+    )
+    if l1_ratio is not None and penalty == "elasticnet":
+        clf_kwargs["l1_ratio"] = float(l1_ratio)
+
+    clf = LogisticRegression(**clf_kwargs)
+    clf.fit(X_train, y_train)
+
+    val_pred = clf.predict(X_val)
+    val_acc = float(np.mean((val_pred == y_val).astype(np.float64)) * 100.0)
+    val_group = _group_acc(y_val, val_pred, g_val, num_groups=4)
+    val_avg_group = _nanmean(val_group)
+    val_worst_group = _nanmin(val_group)
+
+    test_pred = clf.predict(X_test)
+    test_acc = float(np.mean((test_pred == y_test).astype(np.float64)) * 100.0)
+    test_group = _group_acc(y_test, test_pred, g_test, num_groups=4)
+    test_avg_group = _nanmean(test_group)
+    test_worst_group = _nanmin(test_group)
+
+    row = {
+        "trial": trial_id,
+        "clip_model": args.clip_model,
+        "C": C,
+        "penalty": penalty,
+        "solver": solver,
+        "l1_ratio": ("" if l1_ratio is None else float(l1_ratio)),
+        "fit_intercept": fit_intercept,
+        "val_acc": val_acc,
+        "val_avg_group_acc": val_avg_group,
+        "val_worst_group_acc": val_worst_group,
+        "val_group_accs": np.array2string(val_group, precision=2, separator=","),
+        "test_acc": test_acc,
+        "test_avg_group_acc": test_avg_group,
+        "test_worst_group_acc": test_worst_group,
+        "test_group_accs": np.array2string(test_group, precision=2, separator=","),
+        "sampler": sampler,
+    }
+    return row
+
+
+def main():
+    p = argparse.ArgumentParser(description="Optuna sweep for CLIP+LogReg on Waterbirds (group-aware metrics).")
+    p.add_argument("data_path", help="Path to Waterbirds dataset dir containing metadata.csv.")
+    p.add_argument("--clip-model", default="RN50", help='CLIP model name (e.g. "RN50", "ViT-B/32").')
+    p.add_argument("--device", default="cuda", help='Torch device for CLIP feature extraction (e.g. "cuda", "cpu").')
+    p.add_argument("--batch-size", type=int, default=256)
+    p.add_argument("--num-workers", type=int, default=4)
+    p.add_argument("--n-trials", type=int, default=100)
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--output-csv", default="clip_lr_sweep.csv")
+    p.add_argument("--sampler", choices=["tpe", "random"], default="tpe")
+    p.add_argument("--C-min", type=float, default=1e-6)
+    p.add_argument("--C-max", type=float, default=1e4)
+    p.add_argument("--max-iter", type=int, default=5000)
+    p.add_argument(
+        "--objective",
+        choices=["val_avg_group_acc", "val_worst_group_acc"],
+        default="val_avg_group_acc",
+        help="Which validation metric to maximize.",
+    )
+    args = p.parse_args()
+
+    header = [
+        "trial",
+        "clip_model",
+        "C",
+        "penalty",
+        "solver",
+        "l1_ratio",
+        "fit_intercept",
+        "val_acc",
+        "val_avg_group_acc",
+        "val_worst_group_acc",
+        "val_group_accs",
+        "test_acc",
+        "test_avg_group_acc",
+        "test_worst_group_acc",
+        "test_group_accs",
+        "sampler",
+    ]
+
+    rng = np.random.default_rng(args.seed)
+
+    if args.sampler == "tpe":
+        try:
+            import optuna  # noqa: F401
+        except Exception as exc:
+            print(f"[SWEEP] Optuna not available ({exc}); falling back to random search.")
+            args.sampler = "random"
+
+    # Load dataset (Waterbirds class from this repo) and extract CLIP features once.
+    import torch
+
+    clip = _try_import_clip()
+    model, preprocess = clip.load(args.clip_model, device=args.device)
+
+    root, cfg, Waterbirds = _load_waterbirds(args.data_path)
+
+    train_ds = Waterbirds(root=root, cfg=cfg, split="train", transform=preprocess)
+    val_ds = Waterbirds(root=root, cfg=cfg, split="val", transform=preprocess)
+    test_ds = Waterbirds(root=root, cfg=cfg, split="test", transform=preprocess)
+
+    print("[CLIP-LR] Extracting train features...")
+    X_train, y_train, _ = _extract_features(train_ds, model, args.device, args.batch_size, args.num_workers)
+    print("[CLIP-LR] Extracting val features...")
+    X_val, y_val, g_val = _extract_features(val_ds, model, args.device, args.batch_size, args.num_workers)
+    print("[CLIP-LR] Extracting test features...")
+    X_test, y_test, g_test = _extract_features(test_ds, model, args.device, args.batch_size, args.num_workers)
+
+    # Ensure L2 norm on CPU too (already normalized on GPU, but keep it explicit).
+    X_train = _l2_normalize(X_train)
+    X_val = _l2_normalize(X_val)
+    X_test = _l2_normalize(X_test)
+
+    # Make sklearn happy (avoid float64).
+    X_train = X_train.astype(np.float32, copy=False)
+    X_val = X_val.astype(np.float32, copy=False)
+    X_test = X_test.astype(np.float32, copy=False)
+
+    # Free GPU memory for safety.
+    if "cuda" in args.device:
+        del model
+        torch.cuda.empty_cache()
+
+    best_row = None
+
+    def score(row: Dict) -> float:
+        return float(row[args.objective])
+
+    if args.sampler == "random":
+        for trial_id in range(args.n_trials):
+            row = _run_trial(
+                trial_id,
+                "random",
+                rng,
+                args,
+                X_train,
+                y_train,
+                X_val,
+                y_val,
+                g_val,
+                X_test,
+                y_test,
+                g_test,
+            )
+            _write_row(args.output_csv, row, header)
+            if best_row is None or score(row) > score(best_row):
+                best_row = row
+            print(
+                f"[SWEEP] Trial {trial_id} done. {args.objective}={row[args.objective]:.4f} "
+                f"(val_worst_group_acc={row['val_worst_group_acc']:.2f} test_worst_group_acc={row['test_worst_group_acc']:.2f})"
+            )
+    else:
+        import optuna
+
+        sampler = optuna.samplers.TPESampler(seed=args.seed)
+        study = optuna.create_study(direction="maximize", sampler=sampler)
+
+        def objective(trial):
+            nonlocal best_row
+            args.trial = trial
+            row = _run_trial(
+                trial.number,
+                "tpe",
+                rng,
+                args,
+                X_train,
+                y_train,
+                X_val,
+                y_val,
+                g_val,
+                X_test,
+                y_test,
+                g_test,
+            )
+            _write_row(args.output_csv, row, header)
+            if best_row is None or score(row) > score(best_row):
+                best_row = row
+            print(
+                f"[SWEEP] Trial {trial.number} done. {args.objective}={row[args.objective]:.4f} "
+                f"(val_worst_group_acc={row['val_worst_group_acc']:.2f} test_worst_group_acc={row['test_worst_group_acc']:.2f})"
+            )
+            return score(row)
+
+        study.optimize(objective, n_trials=args.n_trials)
+
+    if best_row is not None:
+        print("[SWEEP] Best trial:")
+        for k in header:
+            print(f"  {k}: {best_row[k]}")
+
+
+if __name__ == "__main__":
+    main()
+

@@ -30,6 +30,9 @@ def transformer_attention(model, preprocess, file_path, text_list, tokenized_tex
     Credit to: https://github.com/hila-chefer/Transformer-MM-Explainability
     """
     image = preprocess(Image.open(file_path)).unsqueeze(0).to(device)
+    # Match CLIP dtype to reduce activation memory during backward.
+    if hasattr(model, "dtype"):
+        image = image.type(model.dtype)
 
     logits_per_image, _ = model(image, tokenized_text)
     probs = logits_per_image.softmax(dim=-1).detach().cpu().numpy()
@@ -70,6 +73,16 @@ def transformer_attention(model, preprocess, file_path, text_list, tokenized_tex
         unnormalized_attentions.append(image_relevance)
         image_relevance = normalize(image_relevance)
         attentions.append(image_relevance)
+
+    # Break references to computation graphs held on the model to avoid GPU memory growth.
+    # (The CLIP fork stores per-block attn tensors on the module.)
+    try:
+        image_attn_blocks = list(dict(model.visual.transformer.resblocks.named_children()).values())
+        for blk in image_attn_blocks:
+            blk.attn_probs = None
+            blk.attn_grad = None
+    except Exception:
+        pass
 
     if plot_vis:
         plot_attention_helper(
@@ -174,7 +187,7 @@ def plot(probs, attention_vis, text_list, image_vis, save_path=None):
     probs_vis = probs[0][sort]
     text_list_vis = np.array(text_list)[sort]
 
-    fig, ax = plt.subplots(1,1+len(text_list),figsize=(5*(1+len(text_list)),6))
+    fig, ax = plt.subplots(1, 1 + len(text_list), figsize=(5 * (1 + len(text_list)), 6))
     ax[0].imshow(image_vis)
     ax[0].axis('off')
 
@@ -194,6 +207,7 @@ def plot(probs, attention_vis, text_list, image_vis, save_path=None):
         plt.savefig(save_path, bbox_inches='tight')
     else:
         plt.show()
+    plt.close(fig)
     return
 
 
@@ -283,5 +297,4 @@ def compute_gradcam(fmaps, logits, labels, device, resize=False, resize_shape=No
     gcam /= gcam_max
     gcam = gcam.view(B, C, H, W)
     return gcam
-
 

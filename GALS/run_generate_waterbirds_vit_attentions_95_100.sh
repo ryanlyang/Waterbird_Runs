@@ -5,7 +5,7 @@
 #SBATCH --time=0-23:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=12
-#SBATCH --mem=64G
+#SBATCH --mem=128G
 #SBATCH --output=/home/ryreu/guided_cnn/logsWaterbird/waterbirds_vit_attention_gen_%j.out
 #SBATCH --error=/home/ryreu/guided_cnn/logsWaterbird/waterbirds_vit_attention_gen_%j.err
 #SBATCH --signal=TERM@120

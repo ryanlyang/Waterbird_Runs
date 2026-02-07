@@ -180,11 +180,14 @@ def main(args):
         save_filepath = os.path.join(SAVE_PATH, tail.strip(os.sep))
         save_filepath = save_filepath.replace('.jpg', '.pth')
         torch.save(attention, save_filepath)
+        # Avoid gradual GPU memory fragmentation/leaks across many iterations.
+        del attention
+        if DEVICE == "cuda" and (i + 1) % 25 == 0:
+            torch.cuda.empty_cache()
 
 
 if __name__ == '__main__':
     main(args)
-
 
 
 
