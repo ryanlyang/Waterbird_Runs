@@ -122,13 +122,26 @@ def main(args):
         raise NotImplementedError
 
     num_visualized = 0
+    disable_vis = bool(getattr(args, "DISABLE_VIS", False))
+    skip_existing = bool(getattr(args, "SKIP_EXISTING", False))
+    start_idx = int(getattr(args, "START_IDX", 0))
+    end_idx_raw = getattr(args, "END_IDX", None)
+    end_idx = int(end_idx_raw) if end_idx_raw is not None else len(filenames)
+    end_idx = min(end_idx, len(filenames))
+    if start_idx < 0 or start_idx > len(filenames):
+        raise ValueError(f"START_IDX out of range: {start_idx} (len={len(filenames)})")
+    if end_idx < start_idx:
+        raise ValueError(f"END_IDX must be >= START_IDX (START_IDX={start_idx}, END_IDX={end_idx})")
 
-    for i, f in enumerate(tqdm(filenames)):
+    indices = list(range(start_idx, end_idx))
+    pbar = tqdm(indices, total=len(indices))
+    for i in pbar:
+        f = filenames[i]
         tail = f.split(ROOT)[-1]
         tail_path = os.path.join(SAVE_PATH, *tail.split(os.sep)[:-1])
         os.makedirs(tail_path, exist_ok=True)
 
-        plot_vis = (i % 50 == 0) and num_visualized < 30
+        plot_vis = (not disable_vis) and (i % 50 == 0) and num_visualized < 30
         if plot_vis:
             num_visualized += 1
         os.makedirs(os.path.join(SAVE_PATH, 'vis'), exist_ok=True)
@@ -139,6 +152,11 @@ def main(args):
                 tail.split(os.sep)[-1]
             )
         )
+
+        save_filepath = os.path.join(SAVE_PATH, tail.strip(os.sep))
+        save_filepath = save_filepath.replace('.jpg', '.pth')
+        if skip_existing and os.path.exists(save_filepath):
+            continue
 
         if prompt_type == 'general':
             text_list = prompts
@@ -177,8 +195,6 @@ def main(args):
         else:
             raise NotImplementedError
         assert attention is not None
-        save_filepath = os.path.join(SAVE_PATH, tail.strip(os.sep))
-        save_filepath = save_filepath.replace('.jpg', '.pth')
         torch.save(attention, save_filepath)
         # Avoid gradual GPU memory fragmentation/leaks across many iterations.
         del attention
@@ -188,6 +204,5 @@ def main(args):
 
 if __name__ == '__main__':
     main(args)
-
 
 

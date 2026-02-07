@@ -50,6 +50,7 @@ export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export NUMEXPR_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export PYTHONNOUSERSITE=1
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-max_split_size_mb:64}"
 
 REPO_ROOT=/home/ryreu/guided_cnn/waterbirds/Waterbird_Runs/GALS
 DATA_ROOT=/home/ryreu/guided_cnn/waterbirds
@@ -81,15 +82,35 @@ echo "WB100: $WB100_DIR"
 which python
 
 echo "[GEN] Generating CLIP ViT attentions for Waterbirds-95..."
-srun --unbuffered python -u extract_attention.py \
-  --config configs/waterbirds_95_attention_vit.yaml \
-  DATA.ROOT="$DATA_ROOT" \
-  DATA.WATERBIRDS_DIR="$WB95_DIR"
+CHUNK_SIZE=${CHUNK_SIZE:-1000}
+echo "[GEN]   chunk size: $CHUNK_SIZE"
+WB95_N=${WB95_N:-11788}
+for ((start=0; start<WB95_N; start+=CHUNK_SIZE)); do
+  end=$((start+CHUNK_SIZE))
+  echo "[GEN] WB95 chunk: START_IDX=$start END_IDX=$end"
+  srun --unbuffered python -u extract_attention.py \
+    --config configs/waterbirds_95_attention_vit.yaml \
+    DATA.ROOT="$DATA_ROOT" \
+    DATA.WATERBIRDS_DIR="$WB95_DIR" \
+    DISABLE_VIS=true \
+    SKIP_EXISTING=true \
+    START_IDX="$start" \
+    END_IDX="$end"
+done
 
 echo "[GEN] Generating CLIP ViT attentions for Waterbirds-100..."
-srun --unbuffered python -u extract_attention.py \
-  --config configs/waterbirds_100_attention_vit.yaml \
-  DATA.ROOT="$DATA_ROOT" \
-  DATA.WATERBIRDS_DIR="$WB100_DIR"
+WB100_N=${WB100_N:-11788}
+for ((start=0; start<WB100_N; start+=CHUNK_SIZE)); do
+  end=$((start+CHUNK_SIZE))
+  echo "[GEN] WB100 chunk: START_IDX=$start END_IDX=$end"
+  srun --unbuffered python -u extract_attention.py \
+    --config configs/waterbirds_100_attention_vit.yaml \
+    DATA.ROOT="$DATA_ROOT" \
+    DATA.WATERBIRDS_DIR="$WB100_DIR" \
+    DISABLE_VIS=true \
+    SKIP_EXISTING=true \
+    START_IDX="$start" \
+    END_IDX="$end"
+done
 
 echo "[GEN] Done."
