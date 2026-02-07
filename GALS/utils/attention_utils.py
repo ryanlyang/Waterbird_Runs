@@ -163,7 +163,9 @@ def show_cam_on_image(img, attention):
 
 def plot_attention_helper(image, attentions, unnormalized_attentions, probs, text_list,
                           save_vis_path=None, resize=False):
-    image_vis = image[0].permute(1, 2, 0).data.cpu().numpy()
+    # If CLIP runs in fp16, matplotlib can choke on float16 arrays ("Unsupported dtype").
+    # Convert to float32 explicitly for visualization.
+    image_vis = image[0].detach().float().permute(1, 2, 0).cpu().numpy()
     image_vis = (image_vis - image_vis.min()) / (image_vis.max() - image_vis.min())
     attention_vis = []
     for i in range(len(attentions)):
@@ -297,4 +299,3 @@ def compute_gradcam(fmaps, logits, labels, device, resize=False, resize_shape=No
     gcam /= gcam_max
     gcam = gcam.view(B, C, H, W)
     return gcam
-
