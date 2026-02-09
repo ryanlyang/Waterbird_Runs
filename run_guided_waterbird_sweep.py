@@ -25,29 +25,36 @@ def run_trial(trial_id, args, rng, sampler_name):
     if sampler_name == "random":
         attn_epoch = int(rng.integers(args.attn_min, args.attn_max + 1))
         kl_lambda = loguniform(rng, args.kl_min, args.kl_max)
+        kl_incr = loguniform(rng, args.kl_incr_min, args.kl_incr_max)
         base_lr = loguniform(rng, args.base_lr_min, args.base_lr_max)
         classifier_lr = loguniform(rng, args.cls_lr_min, args.cls_lr_max)
+        lr2_mult = loguniform(rng, args.lr2_mult_min, args.lr2_mult_max)
     else:
         attn_epoch = int(args.trial.suggest_int("attention_epoch", args.attn_min, args.attn_max))
         kl_lambda = float(args.trial.suggest_float("kl_lambda", args.kl_min, args.kl_max, log=True))
+        kl_incr = float(args.trial.suggest_float("kl_incr", args.kl_incr_min, args.kl_incr_max, log=True))
         base_lr = float(args.trial.suggest_float("base_lr", args.base_lr_min, args.base_lr_max, log=True))
         classifier_lr = float(args.trial.suggest_float("classifier_lr", args.cls_lr_min, args.cls_lr_max, log=True))
+        lr2_mult = float(args.trial.suggest_float("lr2_mult", args.lr2_mult_min, args.lr2_mult_max, log=True))
 
     rgw.base_lr = base_lr
     rgw.classifier_lr = classifier_lr
+    rgw.lr2_mult = lr2_mult
     rgw.SEED = args.seed
 
     run_args = SimpleNamespace(data_path=args.data_path, gt_path=args.gt_path)
     best_balanced_val, test_acc, per_group, worst_group, ckpt = rgw.run_single(
-        run_args, attn_epoch, kl_lambda
+        run_args, attn_epoch, kl_lambda, kl_incr
     )
 
     row = {
         "trial": trial_id,
         "attention_epoch": attn_epoch,
         "kl_lambda": kl_lambda,
+        "kl_incr": kl_incr,
         "base_lr": base_lr,
         "classifier_lr": classifier_lr,
+        "lr2_mult": lr2_mult,
         "best_balanced_val_acc": best_balanced_val,
         "test_acc": test_acc,
         "per_group": per_group,
@@ -68,11 +75,15 @@ def main():
     parser.add_argument("--attn-min", type=int, default=0)
     parser.add_argument("--attn-max", type=int, default=rgw.num_epochs - 1)
     parser.add_argument("--kl-min", type=float, default=1.0)
-    parser.add_argument("--kl-max", type=float, default=100000.0)
-    parser.add_argument("--base-lr-min", type=float, default=1e-4)
-    parser.add_argument("--base-lr-max", type=float, default=5e-2)
-    parser.add_argument("--cls-lr-min", type=float, default=1e-5)
+    parser.add_argument("--kl-max", type=float, default=300.0)
+    parser.add_argument("--kl-incr-min", type=float, default=1e-1)
+    parser.add_argument("--kl-incr-max", type=float, default=30.0)
+    parser.add_argument("--base-lr-min", type=float, default=1e-5)
+    parser.add_argument("--base-lr-max", type=float, default=1e-3)
+    parser.add_argument("--cls-lr-min", type=float, default=1e-4)
     parser.add_argument("--cls-lr-max", type=float, default=1e-2)
+    parser.add_argument("--lr2-mult-min", type=float, default=1e-1)
+    parser.add_argument("--lr2-mult-max", type=float, default=3.0)
     parser.add_argument("--sampler", choices=["tpe", "random"], default="tpe")
     args = parser.parse_args()
 
@@ -80,8 +91,10 @@ def main():
         "trial",
         "attention_epoch",
         "kl_lambda",
+        "kl_incr",
         "base_lr",
         "classifier_lr",
+        "lr2_mult",
         "best_balanced_val_acc",
         "test_acc",
         "per_group",

@@ -23,6 +23,7 @@ batch_size = 96
 num_epochs = 200
 base_lr = 0.01
 classifier_lr = 0.01
+lr2_mult = 1.0
 momentum = 0.9
 weight_decay = 1e-5
 
@@ -261,7 +262,7 @@ def _get_param_groups(model, base_lr, classifier_lr):
 
 def train_model(model, dataloaders, dataset_sizes,
                 attention_epoch, kl_lambda_start, num_epochs,
-                base_lr, classifier_lr, kl_incr, use_attention, num_classes):
+                base_lr, classifier_lr, lr2_mult, kl_incr, use_attention, num_classes):
     best_wts = copy.deepcopy(model.state_dict())
     best_optim = -100.0
     best_epoch = -1
@@ -276,8 +277,13 @@ def train_model(model, dataloaders, dataset_sizes,
     for epoch in range(num_epochs):
         # restart at attention_epoch
         if use_attention and epoch == attention_epoch:
-            print(f"*** Attention epoch {epoch} reached: restarting optimizer ***")
-            param_groups = _get_param_groups(model, base_lr, classifier_lr)
+            base_lr_after = base_lr * lr2_mult
+            classifier_lr_after = classifier_lr * lr2_mult
+            print(
+                f"*** Attention epoch {epoch} reached: restarting optimizer "
+                f"(lr2_mult={lr2_mult}, base_lr={base_lr_after}, classifier_lr={classifier_lr_after}) ***"
+            )
+            param_groups = _get_param_groups(model, base_lr_after, classifier_lr_after)
             opt = optim.SGD(param_groups, momentum=momentum, weight_decay=weight_decay)
             best_wts = copy.deepcopy(model.state_dict())
             best_optim = -100.0
@@ -549,7 +555,7 @@ def run_single(args, attn_epoch, kl_value, kl_increment=None):
     best_model, best_score, best_epoch = train_model(
         model, dataloaders, dataset_sizes,
         attn_epoch, kl_value, num_epochs,
-        base_lr=base_lr, classifier_lr=classifier_lr,
+        base_lr=base_lr, classifier_lr=classifier_lr, lr2_mult=lr2_mult,
         kl_incr=kl_increment, use_attention=use_attention,
         num_classes=num_classes
     )
@@ -573,14 +579,14 @@ def run_single(args, attn_epoch, kl_value, kl_increment=None):
         save_path = "NONE"
         print("[RUN DONE] Checkpoint saving disabled via SAVE_CHECKPOINTS=0", flush=True)
 
-    print(f"[RUN DONE] kl={kl_value} attn={attn_epoch} kl_incr={kl_increment} | best_balanced_val_acc={best_score:.4f} "
+    print(f"[RUN DONE] kl={kl_value} attn={attn_epoch} lr2_mult={lr2_mult} kl_incr={kl_increment} | best_balanced_val_acc={best_score:.4f} "
           f"| test_acc={test_acc:.2f}% | saved: {save_path}", flush=True)
     return best_score, test_acc, per_group, worst_group, save_path
 
 
 
 def main():
-    global SEED, base_lr, classifier_lr
+    global SEED, base_lr, classifier_lr, lr2_mult
     parser = argparse.ArgumentParser()
     parser.add_argument('data_path', help='Dataset root (expects metadata.csv or train/ and test/ subdirs)')
     parser.add_argument('gt_path', help='Folder with ground-truth mask PNGs (for train only)')
@@ -591,6 +597,8 @@ def main():
     parser.add_argument('--kl_increment', type=float, default=None, help='Increment added to KL each epoch after attention_epoch')
     parser.add_argument('--base_lr', type=float, default=base_lr, help='Base learning rate')
     parser.add_argument('--classifier_lr', type=float, default=classifier_lr, help='Classifier learning rate')
+    parser.add_argument('--lr2_mult', type=float, default=lr2_mult,
+                        help='Multiplier applied to both base_lr and classifier_lr after attention_epoch restart')
     parser.add_argument('--sweep', action='store_true',
                         help='Run the full hyperparameter sweep (kl 100..300 step 20; attn 5..25 step 2)')
     args = parser.parse_args()
@@ -598,6 +606,7 @@ def main():
     SEED = args.seed
     base_lr = args.base_lr
     classifier_lr = args.classifier_lr
+    lr2_mult = args.lr2_mult
 
     if not args.sweep:
         run_single(args, args.attention_epoch, args.kl_lambda, args.kl_increment)
