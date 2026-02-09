@@ -27,10 +27,14 @@ def calc_loss(metrics, split, batch, inputs, output_dict, labels, cfg, loss_cfg,
     loss += cls_loss
     metrics['{}_cls_loss'.format(split)].update(cls_loss.item(), n=inputs.shape[0])
 
-    # Precompute dy/dx if needed, so can be reused by various losses
-    compute_grad = cfg.EXP.LOSSES.GRADIENT_OUTSIDE.COMPUTE or cfg.EXP.LOSSES.GRADIENT_OUTSIDE.LOG  \
-        or cfg.EXP.LOSSES.GRADIENT_INSIDE.COMPUTE or cfg.EXP.LOSSES.GRADIENT_INSIDE.LOG
-    if compute_grad:
+    # Precompute dy/dx only when auxiliary losses are enabled and gradients are available.
+    compute_grad = aux_losses and (
+        cfg.EXP.LOSSES.GRADIENT_OUTSIDE.COMPUTE
+        or cfg.EXP.LOSSES.GRADIENT_OUTSIDE.LOG
+        or cfg.EXP.LOSSES.GRADIENT_INSIDE.COMPUTE
+        or cfg.EXP.LOSSES.GRADIENT_INSIDE.LOG
+    )
+    if compute_grad and cls_loss.requires_grad and inputs.requires_grad:
         dy_dx = torch.autograd.grad(cls_loss, inputs, retain_graph=True, create_graph=True)
         assert len(dy_dx) == 1
         assert dy_dx[0].shape == inputs.shape
