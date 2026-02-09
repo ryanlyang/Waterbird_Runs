@@ -292,10 +292,11 @@ def compute_gradcam(fmaps, logits, labels, device, resize=False, resize_shape=No
         )
 
     B, C, H, W = gcam.shape
-    gcam = gcam.view(B, -1)
-    gcam_max = gcam.max(dim=1, keepdim=True)[0]
-    gcam_max[torch.where(gcam_max == 0)] = 1. # prevent divide by 0
-    gcam -= gcam.min(dim=1, keepdim=True)[0]
-    gcam /= gcam_max
-    gcam = gcam.view(B, C, H, W)
+    gcam_flat = gcam.view(B, -1)
+    gcam_max = gcam_flat.max(dim=1, keepdim=True)[0]
+    # prevent divide by 0 (out-of-place to keep autograd graph valid)
+    gcam_max = torch.where(gcam_max == 0, torch.ones_like(gcam_max), gcam_max)
+    gcam_min = gcam_flat.min(dim=1, keepdim=True)[0]
+    gcam_flat = (gcam_flat - gcam_min) / gcam_max
+    gcam = gcam_flat.view(B, C, H, W)
     return gcam

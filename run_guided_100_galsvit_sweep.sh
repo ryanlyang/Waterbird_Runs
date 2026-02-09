@@ -2,7 +2,7 @@
 #SBATCH --account=reu-aisocial
 #SBATCH --partition=tier3
 #SBATCH --gres=gpu:a100:1
-#SBATCH --time=2-20:00:00
+#SBATCH --time=15-00:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=24
 #SBATCH --mem=64G
@@ -59,6 +59,9 @@ ATT_ROOT=${ATT_ROOT:-/home/ryreu/guided_cnn/waterbirds/waterbird_1.0_forest2wate
 
 N_TRIALS=${N_TRIALS:-100}
 SWEEP_OUT=${SWEEP_OUT:-$LOG_DIR/guided_100_galsvit_sweep_${SLURM_JOB_ID}.csv}
+POST_SEEDS=${POST_SEEDS:-5}
+POST_SEED_START=${POST_SEED_START:-0}
+POST_OUT=${POST_OUT:-$LOG_DIR/guided_100_galsvit_sweep_best5_${SLURM_JOB_ID}.csv}
 
 cd "$REPO_ROOT"
 export PYTHONPATH="$PWD:${PYTHONPATH:-}"
@@ -78,10 +81,15 @@ echo "Data: $DATA_ROOT"
 echo "GALS ViT attentions: $ATT_ROOT"
 echo "Trials: $N_TRIALS"
 echo "Output CSV: $SWEEP_OUT"
+echo "Post seeds: $POST_SEEDS (start=$POST_SEED_START)"
+echo "Post output CSV: $POST_OUT"
 which python
 
 srun --unbuffered python -u run_guided_waterbird_gals_vitatt_sweep.py \
   "$DATA_ROOT" \
   "$ATT_ROOT" \
   --n-trials "$N_TRIALS" \
-  --output-csv "$SWEEP_OUT"
+  --output-csv "$SWEEP_OUT" \
+  --post-seeds "$POST_SEEDS" \
+  --post-seed-start "$POST_SEED_START" \
+  --post-output-csv "$POST_OUT"

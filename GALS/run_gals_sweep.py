@@ -57,6 +57,27 @@ def write_row(csv_path, row, header):
         writer.writerow(row)
 
 
+def print_runtime_summary(tag, rows, num_epochs=None):
+    secs = [float(r["seconds"]) for r in rows if r.get("seconds") is not None]
+    if not secs:
+        print(f"[TIME] {tag}: no successful trials to summarize.", flush=True)
+        return
+
+    arr = np.array(secs, dtype=float)
+    med_trial_min = float(np.median(arr) / 60.0)
+    total_gpu_hours = float(np.sum(arr) / 3600.0)
+    print(
+        f"[TIME] {tag}: median min/trial={med_trial_min:.2f} | total tuning GPU-hours={total_gpu_hours:.2f}",
+        flush=True,
+    )
+    if num_epochs is not None and num_epochs > 0:
+        med_epoch_min = float(np.median(arr / float(num_epochs)) / 60.0)
+        print(
+            f"[TIME] {tag}: median min/epoch={med_epoch_min:.4f} (epochs/trial={int(num_epochs)})",
+            flush=True,
+        )
+
+
 def _parse_metric_line(line):
     # Matches lines like: "balanced_val_acc: 0.8123" or "test_acc: 0.901"
     parts = line.strip().split(":")
@@ -107,6 +128,9 @@ def run_one_trial(
         f"EXP.BASE.LR={base_lr}",
         f"EXP.CLASSIFIER.LR={classifier_lr}",
         f"EXP.WEIGHT_DECAY={weight_decay}",
+        # Validation objective is balanced val accuracy. Keeping aux guidance losses off on val
+        # avoids expensive second-order gradient graphs and reduces random cuDNN/OOM failures.
+        "EXP.AUX_LOSSES_ON_VAL=False",
     ]
     if method in ("gals", "rrr"):
         if grad_weight is None:
@@ -337,11 +361,13 @@ def main():
     dataset_name = args.dataset or inferred_dataset or "waterbirds"
 
     cfg_weight_decay = None
+    cfg_num_epochs = 200
     OmegaConf = _maybe_import_omegaconf()
     if OmegaConf is not None:
         try:
             _cfg = OmegaConf.load(args.config)
             cfg_weight_decay = float(_cfg.EXP.WEIGHT_DECAY)
+            cfg_num_epochs = int(_cfg.EXP.NUM_EPOCHS)
         except Exception:
             cfg_weight_decay = None
     if cfg_weight_decay is None:
@@ -365,6 +391,7 @@ def main():
 
     best_row = None
     best_dir = None
+    sweep_rows = []
 
     def cleanup_run_dir(path):
         if not path:
@@ -405,6 +432,7 @@ def main():
         )
         row["sampler"] = sampler_name
         write_row(args.output_csv, row, header)
+        sweep_rows.append(row)
 
         score = row["best_balanced_val_acc"]
         is_new_best = score is not None and (best_row is None or score > best_row["best_balanced_val_acc"])
@@ -526,6 +554,7 @@ def main():
             if k in best_row:
                 print(f"  {k}: {best_row[k]}", flush=True)
 
+    post_rows = []
     if best_row is not None and args.post_seeds > 0:
         post_csv = args.post_output_csv
         if post_csv is None:
@@ -559,7 +588,6 @@ def main():
         seeds = list(range(args.post_seed_start, args.post_seed_start + args.post_seeds))
         print(f"[POST] Rerunning best hyperparameters for {len(seeds)} seeds: {seeds}", flush=True)
 
-        post_rows = []
         for s in seeds:
             run_name = f"{args.method}_best_seed{s}"
             row = run_one_trial(
@@ -635,6 +663,10 @@ def main():
         if m_bte is not None:
             print(f"  balanced_test_acc: {m_bte:.2f} +/- {s_bte:.2f}", flush=True)
         print(f"[POST] Wrote: {post_csv}", flush=True)
+
+    print_runtime_summary("sweep", sweep_rows, cfg_num_epochs)
+    if post_rows:
+        print_runtime_summary("post_best_seeds", post_rows, cfg_num_epochs)
 
 
 if __name__ == "__main__":

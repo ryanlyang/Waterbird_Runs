@@ -3,6 +3,7 @@ import argparse
 import csv
 import os
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, Optional, Tuple
@@ -40,6 +41,22 @@ def _write_row(csv_path: str, row: Dict, header: Iterable[str]) -> None:
         if not file_exists:
             writer.writeheader()
         writer.writerow(row)
+
+
+def _print_runtime_summary(tag: str, rows: Iterable[Dict], num_epochs: Optional[int] = None) -> None:
+    secs = [float(r["seconds"]) for r in rows if r.get("seconds") is not None]
+    if not secs:
+        print(f"[TIME] {tag}: no successful trials to summarize.")
+        return
+    arr = np.array(secs, dtype=float)
+    med_trial_min = float(np.median(arr) / 60.0)
+    total_gpu_hours = float(np.sum(arr) / 3600.0)
+    print(f"[TIME] {tag}: median min/trial={med_trial_min:.4f} | total tuning GPU-hours={total_gpu_hours:.4f}")
+    if num_epochs is not None and num_epochs > 0:
+        med_epoch_min = float(np.median(arr / float(num_epochs)) / 60.0)
+        print(f"[TIME] {tag}: median min/epoch={med_epoch_min:.4f} (epochs/trial={int(num_epochs)})")
+    else:
+        print(f"[TIME] {tag}: median min/epoch=N/A (no epoch notion for CLIP+LR)")
 
 
 def _l2_normalize(x: np.ndarray, eps: float = 1e-12) -> np.ndarray:
@@ -186,6 +203,7 @@ def _run_trial(
 ):
     from sklearn.linear_model import LogisticRegression
 
+    t0 = time.time()
     if sampler == "random":
         C = float(np.exp(rng.uniform(np.log(args.C_min), np.log(args.C_max))))
         fit_intercept = bool(rng.integers(0, 2))
@@ -239,8 +257,81 @@ def _run_trial(
         "test_worst_group_acc": test_worst_group,
         "test_group_accs": np.array2string(test_group, precision=2, separator=","),
         "sampler": sampler,
+        "seconds": int(time.time() - t0),
     }
     return row
+
+
+def _run_fixed_params(
+    *,
+    run_id: int,
+    run_label: str,
+    seed: int,
+    C: float,
+    fit_intercept: bool,
+    penalty: str,
+    solver: str,
+    l1_ratio: Optional[float],
+    args,
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    X_val: np.ndarray,
+    y_val: np.ndarray,
+    g_val: np.ndarray,
+    X_test: np.ndarray,
+    y_test: np.ndarray,
+    g_test: np.ndarray,
+):
+    from sklearn.linear_model import LogisticRegression
+
+    t0 = time.time()
+    clf_kwargs = dict(
+        random_state=seed,
+        C=C,
+        penalty=penalty,
+        solver=solver,
+        fit_intercept=fit_intercept,
+        max_iter=args.max_iter,
+        verbose=0,
+    )
+    if l1_ratio is not None and penalty == "elasticnet":
+        clf_kwargs["l1_ratio"] = float(l1_ratio)
+
+    clf = LogisticRegression(**clf_kwargs)
+    clf.fit(X_train, y_train)
+
+    val_pred = clf.predict(X_val)
+    val_acc = float(np.mean((val_pred == y_val).astype(np.float64)) * 100.0)
+    val_group = _group_acc(y_val, val_pred, g_val, num_groups=4)
+    val_avg_group = _nanmean(val_group)
+    val_worst_group = _nanmin(val_group)
+
+    test_pred = clf.predict(X_test)
+    test_acc = float(np.mean((test_pred == y_test).astype(np.float64)) * 100.0)
+    test_group = _group_acc(y_test, test_pred, g_test, num_groups=4)
+    test_avg_group = _nanmean(test_group)
+    test_worst_group = _nanmin(test_group)
+
+    return {
+        "run_id": run_id,
+        "run_label": run_label,
+        "seed": seed,
+        "clip_model": args.clip_model,
+        "C": C,
+        "penalty": penalty,
+        "solver": solver,
+        "l1_ratio": ("" if l1_ratio is None else float(l1_ratio)),
+        "fit_intercept": fit_intercept,
+        "val_acc": val_acc,
+        "val_avg_group_acc": val_avg_group,
+        "val_worst_group_acc": val_worst_group,
+        "val_group_accs": np.array2string(val_group, precision=2, separator=","),
+        "test_acc": test_acc,
+        "test_avg_group_acc": test_avg_group,
+        "test_worst_group_acc": test_worst_group,
+        "test_group_accs": np.array2string(test_group, precision=2, separator=","),
+        "seconds": int(time.time() - t0),
+    }
 
 
 def main():
@@ -257,6 +348,9 @@ def main():
     p.add_argument("--C-min", type=float, default=1e-6)
     p.add_argument("--C-max", type=float, default=1e4)
     p.add_argument("--max-iter", type=int, default=5000)
+    p.add_argument("--post-seeds", type=int, default=5)
+    p.add_argument("--post-seed-start", type=int, default=0)
+    p.add_argument("--post-output-csv", default=None)
     p.add_argument(
         "--objective",
         choices=["val_avg_group_acc", "val_worst_group_acc"],
@@ -282,9 +376,11 @@ def main():
         "test_worst_group_acc",
         "test_group_accs",
         "sampler",
+        "seconds",
     ]
 
     rng = np.random.default_rng(args.seed)
+    sweep_rows = []
 
     if args.sampler == "tpe":
         try:
@@ -349,6 +445,7 @@ def main():
                 g_test,
             )
             _write_row(args.output_csv, row, header)
+            sweep_rows.append(row)
             if best_row is None or score(row) > score(best_row):
                 best_row = row
             print(
@@ -379,6 +476,7 @@ def main():
                 g_test,
             )
             _write_row(args.output_csv, row, header)
+            sweep_rows.append(row)
             if best_row is None or score(row) > score(best_row):
                 best_row = row
             print(
@@ -394,7 +492,82 @@ def main():
         for k in header:
             print(f"  {k}: {best_row[k]}")
 
+    if best_row is not None and args.post_seeds > 0:
+        post_csv = args.post_output_csv
+        if post_csv is None:
+            root, ext = os.path.splitext(args.output_csv)
+            post_csv = f"{root}_best_seeds{ext or '.csv'}"
+
+        post_header = [
+            "run_id",
+            "run_label",
+            "seed",
+            "clip_model",
+            "C",
+            "penalty",
+            "solver",
+            "l1_ratio",
+            "fit_intercept",
+            "val_acc",
+            "val_avg_group_acc",
+            "val_worst_group_acc",
+            "val_group_accs",
+            "test_acc",
+            "test_avg_group_acc",
+            "test_worst_group_acc",
+            "test_group_accs",
+            "sweep_best_trial",
+            "sampler",
+            "objective",
+            "seconds",
+        ]
+
+        best_C = float(best_row["C"])
+        best_penalty = str(best_row["penalty"])
+        best_solver = str(best_row["solver"])
+        best_fit_intercept = str(best_row["fit_intercept"]).lower() in ("1", "true", "yes")
+        best_l1_ratio = best_row["l1_ratio"]
+        if best_l1_ratio in ("", None):
+            best_l1_ratio = None
+        else:
+            best_l1_ratio = float(best_l1_ratio)
+
+        seeds = list(range(args.post_seed_start, args.post_seed_start + args.post_seeds))
+        print(f"[POST] Rerunning best hyperparameters for {len(seeds)} seeds: {seeds}")
+        post_rows = []
+        for idx, s in enumerate(seeds):
+            out_row = _run_fixed_params(
+                run_id=idx,
+                run_label="best5",
+                seed=s,
+                C=best_C,
+                fit_intercept=best_fit_intercept,
+                penalty=best_penalty,
+                solver=best_solver,
+                l1_ratio=best_l1_ratio,
+                args=args,
+                X_train=X_train,
+                y_train=y_train,
+                X_val=X_val,
+                y_val=y_val,
+                g_val=g_val,
+                X_test=X_test,
+                y_test=y_test,
+                g_test=g_test,
+            )
+            out_row["sweep_best_trial"] = int(best_row["trial"])
+            out_row["sampler"] = args.sampler
+            out_row["objective"] = args.objective
+            _write_row(post_csv, out_row, post_header)
+            post_rows.append(out_row)
+            print(
+                f"[POST] seed={s} {args.objective}={out_row[args.objective]:.4f} "
+                f"(test_worst_group_acc={out_row['test_worst_group_acc']:.2f})"
+            )
+        _print_runtime_summary("post_best_seeds", post_rows, num_epochs=None)
+
+    _print_runtime_summary("sweep", sweep_rows, num_epochs=None)
+
 
 if __name__ == "__main__":
     main()
-

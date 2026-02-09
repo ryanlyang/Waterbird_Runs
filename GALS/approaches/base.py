@@ -404,7 +404,13 @@ class Base():
 
     def validate(self, metrics):
         self.net.eval()
-        torch.set_grad_enabled(self.need_eval_grad)
+        # If aux guidance losses are disabled on val, we should run full no_grad validation
+        # to avoid unnecessary graph allocation and random cuDNN/OOM failures.
+        compute_aux_on_val = True
+        if hasattr(self.CFG, 'EXP') and hasattr(self.CFG.EXP, 'AUX_LOSSES_ON_VAL'):
+            compute_aux_on_val = bool(self.CFG.EXP.AUX_LOSSES_ON_VAL)
+        use_eval_grad = self.need_eval_grad and compute_aux_on_val
+        torch.set_grad_enabled(use_eval_grad)
 
         for i, data in enumerate(tqdm(self.val_dataloader)):
             metrics = self.eval_batch(data, metrics, mode='val')

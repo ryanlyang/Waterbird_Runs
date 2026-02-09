@@ -1,6 +1,7 @@
 import argparse
 import csv
 import os
+import time
 from types import SimpleNamespace
 
 import numpy as np
@@ -21,7 +22,24 @@ def write_row(csv_path, row, header):
         writer.writerow(row)
 
 
+def print_runtime_summary(tag, rows, num_epochs):
+    secs = [float(r["seconds"]) for r in rows if r.get("seconds") is not None]
+    if not secs:
+        print(f"[TIME] {tag}: no successful trials to summarize.")
+        return
+    arr = np.array(secs, dtype=float)
+    med_trial_min = float(np.median(arr) / 60.0)
+    total_gpu_hours = float(np.sum(arr) / 3600.0)
+    print(f"[TIME] {tag}: median min/trial={med_trial_min:.4f} | total tuning GPU-hours={total_gpu_hours:.4f}")
+    if num_epochs is not None and num_epochs > 0:
+        med_epoch_min = float(np.median(arr / float(num_epochs)) / 60.0)
+        print(f"[TIME] {tag}: median min/epoch={med_epoch_min:.4f} (epochs/trial={int(num_epochs)})")
+    else:
+        print(f"[TIME] {tag}: median min/epoch=N/A")
+
+
 def run_trial(trial_id, args, rng, sampler_name):
+    t0 = time.time()
     if sampler_name == "random":
         attn_epoch = int(rng.integers(args.attn_min, args.attn_max + 1))
         kl_lambda = loguniform(rng, args.kl_min, args.kl_max)
@@ -61,6 +79,7 @@ def run_trial(trial_id, args, rng, sampler_name):
         "worst_group": worst_group,
         "checkpoint": ckpt,
         "sampler": sampler_name,
+        "seconds": int(time.time() - t0),
     }
     return row
 
@@ -101,6 +120,7 @@ def main():
         "worst_group",
         "checkpoint",
         "sampler",
+        "seconds",
     ]
 
     rng = np.random.default_rng(args.seed)
@@ -113,10 +133,12 @@ def main():
             args.sampler = "random"
 
     best_row = None
+    sweep_rows = []
     if args.sampler == "random":
         for trial_id in range(args.n_trials):
             row = run_trial(trial_id, args, rng, "random")
             write_row(args.output_csv, row, header)
+            sweep_rows.append(row)
             if best_row is None or row["best_balanced_val_acc"] > best_row["best_balanced_val_acc"]:
                 best_row = row
             print(f"[SWEEP] Trial {trial_id} done. best_balanced_val_acc={row['best_balanced_val_acc']:.4f}")
@@ -128,6 +150,7 @@ def main():
             args.trial = trial
             row = run_trial(trial.number, args, rng, "tpe")
             write_row(args.output_csv, row, header)
+            sweep_rows.append(row)
             if best_row is None or row["best_balanced_val_acc"] > best_row["best_balanced_val_acc"]:
                 best_row = row
             print(f"[SWEEP] Trial {trial.number} done. best_balanced_val_acc={row['best_balanced_val_acc']:.4f}")
@@ -140,6 +163,7 @@ def main():
         print("[SWEEP] Best trial:")
         for k in header:
             print(f"  {k}: {best_row[k]}")
+    print_runtime_summary("sweep", sweep_rows, rgw.num_epochs)
 
 
 if __name__ == "__main__":
