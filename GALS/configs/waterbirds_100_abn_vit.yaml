@@ -30,6 +30,7 @@ EXP:
       CRITERION: "L1"
       GT: "clip_vit"
       MODE: "suppress_outside"
+      COMBINE_ATT_MODE: "average_nonzero"
 
   NUM_EPOCHS: 200
   OPTIMIZER: "SGD"
@@ -42,4 +43,3 @@ EXP:
 
   CLASSIFIER:
     LR: 0.001
-

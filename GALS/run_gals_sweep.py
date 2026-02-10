@@ -16,6 +16,10 @@ FLOAT_RE = re.compile(r"([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)")
 def loguniform(rng, low, high):
     return float(np.exp(rng.uniform(np.log(low), np.log(high))))
 
+
+def sanitize_name(text):
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", str(text)).strip("._-")
+
 def _maybe_import_omegaconf():
     try:
         from omegaconf import OmegaConf  # type: ignore
@@ -324,6 +328,14 @@ def main():
         help="What to keep for the post-sweep seed reruns under trained_weights/: all or none.",
     )
     parser.add_argument(
+        "--run-name-prefix",
+        default=None,
+        help=(
+            "Prefix for all run names/checkpoint dirs. "
+            "Default is auto-generated from method, dataset dir, and SLURM_JOB_ID."
+        ),
+    )
+    parser.add_argument(
         "overrides",
         nargs=argparse.REMAINDER,
         help="Extra OmegaConf overrides passed through to main.py (e.g. DATA.SEGMENTATION_DIR=/path/to/masks).",
@@ -359,6 +371,13 @@ def main():
 
     inferred_dataset, inferred_attention_dir = _infer_dataset_and_attention_dir(args.config)
     dataset_name = args.dataset or inferred_dataset or "waterbirds"
+    dataset_tag = sanitize_name(os.path.basename(args.waterbirds_dir) or args.waterbirds_dir)
+    job_tag = sanitize_name(os.environ.get("SLURM_JOB_ID", "nojid"))
+    if args.run_name_prefix:
+        run_name_prefix = sanitize_name(args.run_name_prefix)
+    else:
+        run_name_prefix = sanitize_name(f"{args.method}_{dataset_tag}_{job_tag}")
+    print(f"[SWEEP] run_name_prefix={run_name_prefix}", flush=True)
 
     cfg_weight_decay = None
     cfg_num_epochs = 200
@@ -411,8 +430,10 @@ def main():
         sampler_name,
     ):
         nonlocal best_row, best_dir
+        run_name = f"{run_name_prefix}_trial_{trial_id:03d}"
         row = run_one_trial(
             trial_id,
+            run_name=run_name,
             method=args.method,
             config=args.config,
             data_root=args.data_root,
@@ -589,7 +610,7 @@ def main():
         print(f"[POST] Rerunning best hyperparameters for {len(seeds)} seeds: {seeds}", flush=True)
 
         for s in seeds:
-            run_name = f"{args.method}_best_seed{s}"
+            run_name = f"{run_name_prefix}_best_seed{s}"
             row = run_one_trial(
                 100000 + s,
                 run_name=run_name,

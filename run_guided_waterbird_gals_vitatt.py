@@ -24,6 +24,7 @@ batch_size = base.batch_size
 num_epochs = base.num_epochs
 base_lr = base.base_lr
 classifier_lr = base.classifier_lr
+lr2_mult = base.lr2_mult
 momentum = base.momentum
 weight_decay = base.weight_decay
 
@@ -305,6 +306,7 @@ def run_single(args, attn_epoch, kl_value, kl_increment=None):
         num_epochs,
         base_lr=base_lr,
         classifier_lr=classifier_lr,
+        lr2_mult=lr2_mult,
         kl_incr=kl_increment,
         use_attention=use_attention,
         num_classes=num_classes,
@@ -333,10 +335,11 @@ def main():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--attention-epoch", type=int, default=0)
     parser.add_argument("--kl-lambda", type=float, default=1.0)
+    parser.add_argument("--lr2-mult", type=float, default=lr2_mult)
     args = parser.parse_args()
 
-    global SEED
-    SEED = args.seed
+    globals()["SEED"] = args.seed
+    globals()["lr2_mult"] = args.lr2_mult
 
     run_args = SimpleNamespace(data_path=args.data_path, att_path=args.att_path, att_key=args.att_key,
                                att_combine=args.att_combine, att_norm01=args.att_norm01, att_brighten=args.att_brighten)
@@ -345,4 +348,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

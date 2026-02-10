@@ -312,10 +312,16 @@ def get_gt_pred_attentions(loss_settings, loss_name, batch, inputs, device,
         gt_attentions = gt_attentions.bool().float()
     else:
         gt_attentions = batch['attention'].to(device)
+        # Older ABN configs omit COMBINE_ATT_MODE; default to the
+        # same behavior used in base configs for compatibility.
+        try:
+            combine_att_mode = loss_settings['COMBINE_ATT_MODE']
+        except Exception:
+            combine_att_mode = 'average_nonzero'
         gt_attentions, valid_pred_attentions = get_valid_attentions(
             gt_attentions,
             valid_pred_attentions,
-            loss_settings['COMBINE_ATT_MODE'],
+            combine_att_mode,
             loss_name=loss_name
         )
     if 'INVERT' in loss_settings and loss_settings['INVERT'] and gt_attentions is not None:

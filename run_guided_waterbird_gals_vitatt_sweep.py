@@ -55,6 +55,7 @@ def run_trial(trial_id, args, rng, sampler_name):
 
     rgw.base_lr = base_lr
     rgw.classifier_lr = classifier_lr
+    rgw.lr2_mult = float(args.lr2_mult)
     rgw.SEED = args.seed
 
     run_args = SimpleNamespace(
@@ -76,6 +77,7 @@ def run_trial(trial_id, args, rng, sampler_name):
         "kl_incr": kl_incr,
         "base_lr": base_lr,
         "classifier_lr": classifier_lr,
+        "lr2_mult": float(args.lr2_mult),
         "best_balanced_val_acc": best_balanced_val,
         "test_acc": test_acc,
         "per_group": per_group,
@@ -109,6 +111,7 @@ def main():
     parser.add_argument("--base-lr-max", type=float, default=1e-3)
     parser.add_argument("--cls-lr-min", type=float, default=1e-4)
     parser.add_argument("--cls-lr-max", type=float, default=1e-2)
+    parser.add_argument("--lr2-mult", type=float, default=1.0)
     parser.add_argument("--sampler", choices=["tpe", "random"], default="tpe")
     parser.add_argument("--post-seeds", type=int, default=5)
     parser.add_argument("--post-seed-start", type=int, default=0)
@@ -122,6 +125,7 @@ def main():
         "kl_incr",
         "base_lr",
         "classifier_lr",
+        "lr2_mult",
         "best_balanced_val_acc",
         "test_acc",
         "per_group",
@@ -186,6 +190,7 @@ def main():
             "kl_incr",
             "base_lr",
             "classifier_lr",
+            "lr2_mult",
             "best_balanced_val_acc",
             "test_acc",
             "per_group",
@@ -201,6 +206,7 @@ def main():
         best_kl_incr = float(best_row["kl_incr"])
         best_base_lr = float(best_row["base_lr"])
         best_classifier_lr = float(best_row["classifier_lr"])
+        best_lr2_mult = float(best_row["lr2_mult"])
 
         seeds = list(range(args.post_seed_start, args.post_seed_start + args.post_seeds))
         print(f"[POST] Rerunning best hyperparameters for {len(seeds)} seeds: {seeds}")
@@ -208,6 +214,7 @@ def main():
         for s in seeds:
             rgw.base_lr = best_base_lr
             rgw.classifier_lr = best_classifier_lr
+            rgw.lr2_mult = best_lr2_mult
             rgw.SEED = s
 
             run_args = SimpleNamespace(
@@ -231,6 +238,7 @@ def main():
                 "kl_incr": best_kl_incr,
                 "base_lr": best_base_lr,
                 "classifier_lr": best_classifier_lr,
+                "lr2_mult": best_lr2_mult,
                 "best_balanced_val_acc": best_balanced_val,
                 "test_acc": test_acc,
                 "per_group": per_group,
