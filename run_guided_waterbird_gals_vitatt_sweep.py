@@ -112,11 +112,27 @@ def main():
     parser.add_argument("--cls-lr-min", type=float, default=1e-4)
     parser.add_argument("--cls-lr-max", type=float, default=1e-2)
     parser.add_argument("--lr2-mult", type=float, default=1.0)
+    parser.add_argument(
+        "--num-epochs",
+        type=int,
+        default=None,
+        help="Optional override for training epochs (default uses module constant).",
+    )
     parser.add_argument("--sampler", choices=["tpe", "random"], default="tpe")
     parser.add_argument("--post-seeds", type=int, default=5)
     parser.add_argument("--post-seed-start", type=int, default=0)
     parser.add_argument("--post-output-csv", default=None)
     args = parser.parse_args()
+
+    if args.num_epochs is not None:
+        if args.num_epochs < 1:
+            raise ValueError("--num-epochs must be >= 1")
+        rgw.num_epochs = int(args.num_epochs)
+        max_attn = max(0, rgw.num_epochs - 1)
+        if args.attn_max > max_attn:
+            args.attn_max = max_attn
+        if args.attn_min > args.attn_max:
+            args.attn_min = args.attn_max
 
     header = [
         "trial",
