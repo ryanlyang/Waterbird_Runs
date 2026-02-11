@@ -102,6 +102,23 @@ class Base():
             self.no_penalty_person_eval = self.CFG.DATA.NO_PENALTY_PERSON_PRED_EVAL
         elif self.CFG.DATA.DATASET == 'food_subset':
             self.label_mapping = np.array(sorted(self.CFG.DATA.CLASSES))
+            if self.CFG.DATA.USE_CLASS_WEIGHTS:
+                from datasets.food import get_loss_upweights
+                food_dir = 'food-101'
+                if hasattr(self.CFG.DATA, 'FOOD_SUBSET_DIR') and self.CFG.DATA.FOOD_SUBSET_DIR is not None:
+                    if str(self.CFG.DATA.FOOD_SUBSET_DIR).upper() != "NONE":
+                        food_dir = str(self.CFG.DATA.FOOD_SUBSET_DIR)
+                elif hasattr(self.CFG.DATA, 'SUBDIR') and self.CFG.DATA.SUBDIR is not None:
+                    if str(self.CFG.DATA.SUBDIR).upper() != "NONE":
+                        food_dir = str(self.CFG.DATA.SUBDIR)
+
+                self.class_weights = get_loss_upweights(
+                    root=self.CFG.DATA.ROOT,
+                    food_dir=food_dir,
+                    classes=self.CFG.DATA.CLASSES,
+                    split_col=self.CFG.DATA.SPLIT,
+                    split='train'
+                ).to(self.device)
         else:
             raise NotImplementedError
 

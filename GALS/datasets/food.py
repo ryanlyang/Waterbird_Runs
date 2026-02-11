@@ -111,3 +111,34 @@ class FoodSubset(datasets.ImageFolder):
             'bbox': NULL,
             'attention': att,
         }
+
+
+def get_loss_upweights(root, food_dir='food-101', classes=None, split_col='split', split='train'):
+    """
+    Compute inverse-frequency class weights from all_images.csv for food_subset.
+
+    Returns tensor of shape (#classes,), normalized by max inverse frequency.
+    """
+    csv_path = os.path.join(root, food_dir, 'meta', 'all_images.csv')
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(f"Missing csv for food class weights: {csv_path}")
+
+    df = pd.read_csv(csv_path)
+    if classes is not None:
+        classes = sorted(classes)
+        df = pd.concat([df[df['label'] == c] for c in classes])
+    else:
+        classes = sorted(df['label'].unique().tolist())
+    df = df[df[split_col] == split]
+
+    counts = []
+    for c in classes:
+        n = int((df['label'] == c).sum())
+        if n <= 0:
+            raise ValueError(f"Class '{c}' has 0 samples in split '{split}'")
+        counts.append(n)
+
+    counts = torch.tensor(counts, dtype=torch.float32)
+    inv = 1.0 / counts
+    weights = inv / torch.max(inv)
+    return weights

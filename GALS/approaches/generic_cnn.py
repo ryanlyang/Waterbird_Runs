@@ -62,10 +62,12 @@ class GenericCNN(Base):
 
         if self.CFG.EXP.OPTIMIZER == 'SGD':
             print('USING SGD OPTIMIZER')
+            nesterov = bool(getattr(self.CFG.EXP, "NESTEROV", False))
             self.opt = optim.SGD(
                 param_list,
                 momentum=self.CFG.EXP.MOMENTUM,
-                weight_decay=self.CFG.EXP.WEIGHT_DECAY
+                weight_decay=self.CFG.EXP.WEIGHT_DECAY,
+                nesterov=nesterov
             )
         elif self.CFG.EXP.OPTIMIZER == 'ADAMW':
             print('USING ADAMW OPTIMIZER')
@@ -76,7 +78,6 @@ class GenericCNN(Base):
             )
         else:
             raise NotImplementedError
-
 
 
 

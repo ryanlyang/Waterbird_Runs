@@ -1,0 +1,147 @@
+#!/bin/bash -l
+# Optuna sweep for Red Meat Vanilla SGD.
+#
+# Tuned hyperparameters:
+#   - lr:           3e-5 .. 3e-2   (log)
+#   - weight_decay: 1e-7 .. 1e-3   (log)
+#   - momentum:     0.80 .. 0.98   (linear)
+#   - nesterov:     {False, True}
+#
+# Flow:
+#   - 50 trials by default
+#   - best val hyperparameters rerun on 5 seeds
+
+#SBATCH --account=reu-aisocial
+#SBATCH --partition=tier3
+#SBATCH --gres=gpu:a100:1
+#SBATCH --time=7-00:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=12
+#SBATCH --mem=64G
+#SBATCH --output=/home/ryreu/guided_cnn/logsMeat/redmeat_vanilla_sgd_sweep_%j.out
+#SBATCH --error=/home/ryreu/guided_cnn/logsMeat/redmeat_vanilla_sgd_sweep_%j.err
+#SBATCH --signal=TERM@120
+
+set -Eeuo pipefail
+
+LOG_DIR=/home/ryreu/guided_cnn/logsMeat
+mkdir -p "$LOG_DIR"
+
+source ~/miniconda3/etc/profile.d/conda.sh
+
+ENV_NAME=${ENV_NAME:-gals_a100}
+BOOTSTRAP_ENV=${BOOTSTRAP_ENV:-0}
+RECREATE_ENV=${RECREATE_ENV:-0}
+REQ_FILE=/home/ryreu/guided_cnn/Food101/Waterbird_Runs/GALS/requirements.txt
+
+if [[ "$BOOTSTRAP_ENV" -eq 1 ]]; then
+  if [[ "$RECREATE_ENV" -eq 1 ]]; then
+    conda env remove -n "$ENV_NAME" -y || true
+  fi
+  if ! conda env list | grep -E "^${ENV_NAME}[[:space:]]" >/dev/null; then
+    conda create -y -n "$ENV_NAME" python=3.8
+    conda activate "$ENV_NAME"
+    conda install -y pytorch==1.12.1 torchvision==0.13.1 cudatoolkit=11.3 -c pytorch -c nvidia -c conda-forge
+    conda install -y -c conda-forge pycocotools
+    REQ_TMP=/tmp/${ENV_NAME}_reqs_$$.txt
+    grep -v -E '^(opencv-python|pycocotools|torch|torchvision|torchray)' "$REQ_FILE" > "$REQ_TMP"
+    pip install -r "$REQ_TMP"
+    rm -f "$REQ_TMP"
+    pip install torchray==1.0.0.2 --no-deps
+    pip install opencv-python==4.6.0.66
+    conda deactivate
+  fi
+fi
+
+conda activate "$ENV_NAME"
+
+export TF_CPP_MIN_LOG_LEVEL=3
+export TF_ENABLE_ONEDNN_OPTS=0
+export WANDB_DISABLED=true
+export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
+export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
+export NUMEXPR_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
+export PYTHONNOUSERSITE=1
+
+REPO_ROOT=/home/ryreu/guided_cnn/Food101/Waterbird_Runs/GALS
+DATA_ROOT=${DATA_ROOT:-/home/ryreu/guided_cnn/Food101/data}
+DATA_DIR=${DATA_DIR:-food-101-redmeat}
+
+N_TRIALS=${N_TRIALS:-50}
+SWEEP_SEED=${SWEEP_SEED:-0}
+TRAIN_SEED=${TRAIN_SEED:-0}
+SAMPLER=${SAMPLER:-tpe}
+KEEP=${KEEP:-best}
+MAX_HOURS=${MAX_HOURS:-}
+POST_SEEDS=${POST_SEEDS:-5}
+POST_SEED_START=${POST_SEED_START:-0}
+POST_KEEP=${POST_KEEP:-all}
+
+LR_MIN=${LR_MIN:-3e-5}
+LR_MAX=${LR_MAX:-3e-2}
+WEIGHT_DECAY_MIN=${WEIGHT_DECAY_MIN:-1e-7}
+WEIGHT_DECAY_MAX=${WEIGHT_DECAY_MAX:-1e-3}
+MOMENTUM_MIN=${MOMENTUM_MIN:-0.80}
+MOMENTUM_MAX=${MOMENTUM_MAX:-0.98}
+
+cd "$REPO_ROOT"
+export PYTHONPATH="$PWD:${PYTHONPATH:-}"
+
+if [[ -z "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+  export CUDA_VISIBLE_DEVICES=0
+fi
+
+if [[ ! -f "$DATA_ROOT/$DATA_DIR/meta/all_images.csv" ]]; then
+  echo "[ERROR] Missing metadata CSV: $DATA_ROOT/$DATA_DIR/meta/all_images.csv" >&2
+  exit 2
+fi
+
+echo "[$(date)] Host: $(hostname)"
+echo "Repo: $REPO_ROOT"
+echo "Data: $DATA_ROOT/$DATA_DIR"
+echo "Trials: $N_TRIALS (sampler=$SAMPLER sweep_seed=$SWEEP_SEED train_seed=$TRAIN_SEED)"
+echo "Ranges:"
+echo "  lr:           [$LR_MIN, $LR_MAX] (log)"
+echo "  weight_decay: [$WEIGHT_DECAY_MIN, $WEIGHT_DECAY_MAX] (log)"
+echo "  momentum:     [$MOMENTUM_MIN, $MOMENTUM_MAX] (linear)"
+echo "  nesterov:     {False, True}"
+which python
+
+python -c "import optuna" 2>/dev/null || {
+  echo "[INFO] Installing optuna..."
+  pip install -q optuna
+}
+
+OUT_CSV="$LOG_DIR/redmeat_vanilla_sgd_sweep_${SLURM_JOB_ID}.csv"
+TRIAL_LOGS="$LOG_DIR/redmeat_vanilla_sgd_sweep_logs_${SLURM_JOB_ID}"
+
+ARGS=(--config configs/food_vanilla.yaml
+  --data-root "$DATA_ROOT"
+  --food-dir "$DATA_DIR"
+  --dataset food_subset
+  --n-trials "$N_TRIALS"
+  --seed "$SWEEP_SEED"
+  --train-seed "$TRAIN_SEED"
+  --sampler "$SAMPLER"
+  --keep "$KEEP"
+  --output-csv "$OUT_CSV"
+  --logs-dir "$TRIAL_LOGS"
+  --lr-min "$LR_MIN"
+  --lr-max "$LR_MAX"
+  --weight-decay-min "$WEIGHT_DECAY_MIN"
+  --weight-decay-max "$WEIGHT_DECAY_MAX"
+  --momentum-min "$MOMENTUM_MIN"
+  --momentum-max "$MOMENTUM_MAX"
+  --post-seeds "$POST_SEEDS"
+  --post-seed-start "$POST_SEED_START"
+  --post-keep "$POST_KEEP"
+)
+
+if [[ -n "${MAX_HOURS:-}" ]]; then
+  ARGS+=(--max-hours "$MAX_HOURS")
+fi
+
+srun --unbuffered python -u run_vanilla_sgd_sweep.py "${ARGS[@]}" \
+  DATA.FOOD_SUBSET_DIR="$DATA_DIR" \
+  DATA.SUBDIR="$DATA_DIR"
+
