@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import random
 import torchvision.datasets as datasets
+import torch.nn.functional as F
 
 
 class FoodSubset(datasets.ImageFolder):
@@ -18,17 +19,29 @@ class FoodSubset(datasets.ImageFolder):
             target_transform=None,
             is_valid_file=None,
     ):
+        food_dir = "food-101"
+        if cfg is not None and hasattr(cfg, "DATA"):
+            # Prefer FOOD_SUBSET_DIR if provided, then SUBDIR.
+            # Keep backward compatibility with existing configs defaulting to food-101.
+            if hasattr(cfg.DATA, "FOOD_SUBSET_DIR") and cfg.DATA.FOOD_SUBSET_DIR is not None:
+                if str(cfg.DATA.FOOD_SUBSET_DIR).upper() != "NONE":
+                    food_dir = str(cfg.DATA.FOOD_SUBSET_DIR)
+            elif hasattr(cfg.DATA, "SUBDIR") and cfg.DATA.SUBDIR is not None:
+                if str(cfg.DATA.SUBDIR).upper() != "NONE":
+                    food_dir = str(cfg.DATA.SUBDIR)
+
         super().__init__(
-            f"{root}/food-101/train",
+            f"{root}/{food_dir}/train",
             transform=transform,
             target_transform=target_transform,
             is_valid_file=is_valid_file
         )
 
         self.cfg = cfg
+        self.food_dir = food_dir
         if self.cfg.DATA.CLASSES == None:
             self.classes = []
-            with open(f"{root}/food-101/meta/labels.txt") as f:
+            with open(f"{root}/{food_dir}/meta/labels.txt") as f:
                 for line in f:
                     self.classes.append(
                         line.replace('\n', '').replace(' ', '_').lower()
@@ -36,7 +49,7 @@ class FoodSubset(datasets.ImageFolder):
         else:
             self.classes = sorted(self.cfg.DATA.CLASSES)
         df = pd.read_csv(
-            os.path.join(self.cfg.DATA.ROOT,'food-101/meta/all_images.csv')
+            os.path.join(self.cfg.DATA.ROOT, food_dir, 'meta', 'all_images.csv')
         )
         df = pd.concat(
             [df[df['label'] == c] for c in self.classes]
@@ -44,10 +57,10 @@ class FoodSubset(datasets.ImageFolder):
         self.df = df[df[self.cfg.DATA.SPLIT] == split]
         self.filename_array = self.df["abs_file_path"].values
         self.imgs = [
-            (f"{root}/food-101/{f}", self.classes.index(l)) for f, l in zip(self.df["abs_file_path"], self.df['label'])
+            (f"{root}/{food_dir}/{f}", self.classes.index(l)) for f, l in zip(self.df["abs_file_path"], self.df['label'])
         ]
         self.data = np.array(
-            [f"{root}/food-101/{f}" for f in df["abs_file_path"]]
+            [f"{root}/{food_dir}/{f}" for f in df["abs_file_path"]]
         )
         self.samples = self.imgs
         self.groups = [0 for i in range(len(self.imgs))]
@@ -98,4 +111,3 @@ class FoodSubset(datasets.ImageFolder):
             'bbox': NULL,
             'attention': att,
         }
-
