@@ -1,0 +1,3 @@
+[SWEEP] run_name_prefix=abn_cls_waterbird_1.0_forest2water2_21047520
+[SWEEP] Trial 0 failed: Trial 0 failed with exit code 1. See /home/ryreu/guided_cnn/logsWaterbird/smoke_debug_21047520/abn100_baseline_logs/abn_cls_waterbird_1.0_forest2water2_21047520_trial_000.log
+[TIME] sweep: no successful trials to summarize.

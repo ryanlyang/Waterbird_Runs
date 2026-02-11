@@ -1,0 +1,71 @@
+===== [SMOKE] gals95_rn50 =====
+[SMOKE] gals95_rn50 => PASS (204s)
+===== [SMOKE] gals100_rn50 =====
+[SMOKE] gals100_rn50 => PASS (234s)
+===== [SMOKE] rrr95_vit =====
+[SMOKE] rrr95_vit => PASS (166s)
+===== [SMOKE] rrr100_vit =====
+[SMOKE] rrr100_vit => PASS (157s)
+===== [SMOKE] gradcam95_vit =====
+[SMOKE] gradcam95_vit => PASS (115s)
+===== [SMOKE] gradcam100_vit =====
+[SMOKE] gradcam100_vit => PASS (112s)
+===== [SMOKE] abn95_vit =====
+[SMOKE] abn95_vit => PASS (25s)
+===== [SMOKE] abn100_vit =====
+[SMOKE] abn100_vit => PASS (45s)
+===== [SMOKE] gals95_vit =====
+[SMOKE] gals95_vit => PASS (151s)
+===== [SMOKE] gals100_vit =====
+[SMOKE] gals100_vit => PASS (156s)
+===== [SMOKE] gals95_ourmasks =====
+[SMOKE] gals95_ourmasks => PASS (173s)
+===== [SMOKE] gals100_ourmasks =====
+[SMOKE] gals100_ourmasks => PASS (160s)
+===== [SMOKE] upweight95 =====
+[SMOKE] upweight95 => PASS (108s)
+===== [SMOKE] upweight100 =====
+[SMOKE] upweight100 => PASS (106s)
+===== [SMOKE] abn95_baseline =====
+[SMOKE] abn95_baseline => PASS (21s)
+===== [SMOKE] abn100_baseline =====
+[SMOKE] abn100_baseline => PASS (20s)
+===== [SMOKE] guided95_galsvit =====
+[SMOKE] guided95_galsvit => FAIL (9s)
+===== [SMOKE] guided100_galsvit =====
+[SMOKE] guided100_galsvit => FAIL (7s)
+===== [SMOKE] clip_lr95 =====
+[SMOKE] clip_lr95 => FAIL (5s)
+===== [SMOKE] clip_lr100 =====
+[SMOKE] clip_lr100 => FAIL (4s)
+===== [SMOKE] vanilla95 =====
+[SMOKE] vanilla95 => PASS (34s)
+===== [SMOKE] vanilla100 =====
+[SMOKE] vanilla100 => PASS (30s)
+
+===== [SMOKE SUMMARY] =====
+PASS=18 FAIL=4
+Summary CSV: /home/ryreu/guided_cnn/logsWaterbird/smoke_debug_21047520/summary.csv
+name,status,seconds,log
+gals95_rn50,PASS,204,/home/ryreu/guided_cnn/logsWaterbird/smoke_debug_21047520/gals95_rn50.log
+gals100_rn50,PASS,234,/home/ryreu/guided_cnn/logsWaterbird/smoke_debug_21047520/gals100_rn50.log
+rrr95_vit,PASS,166,/home/ryreu/guided_cnn/logsWaterbird/smoke_debug_21047520/rrr95_vit.log
+rrr100_vit,PASS,157,/home/ryreu/guided_cnn/logsWaterbird/smoke_debug_21047520/rrr100_vit.log
+gradcam95_vit,PASS,115,/home/ryreu/guided_cnn/logsWaterbird/smoke_debug_21047520/gradcam95_vit.log
+gradcam100_vit,PASS,112,/home/ryreu/guided_cnn/logsWaterbird/smoke_debug_21047520/gradcam100_vit.log
+abn95_vit,PASS,25,/home/ryreu/guided_cnn/logsWaterbird/smoke_debug_21047520/abn95_vit.log
+abn100_vit,PASS,45,/home/ryreu/guided_cnn/logsWaterbird/smoke_debug_21047520/abn100_vit.log
+gals95_vit,PASS,151,/home/ryreu/guided_cnn/logsWaterbird/smoke_debug_21047520/gals95_vit.log
+gals100_vit,PASS,156,/home/ryreu/guided_cnn/logsWaterbird/smoke_debug_21047520/gals100_vit.log
+gals95_ourmasks,PASS,173,/home/ryreu/guided_cnn/logsWaterbird/smoke_debug_21047520/gals95_ourmasks.log
+gals100_ourmasks,PASS,160,/home/ryreu/guided_cnn/logsWaterbird/smoke_debug_21047520/gals100_ourmasks.log
+upweight95,PASS,108,/home/ryreu/guided_cnn/logsWaterbird/smoke_debug_21047520/upweight95.log
+upweight100,PASS,106,/home/ryreu/guided_cnn/logsWaterbird/smoke_debug_21047520/upweight100.log
+abn95_baseline,PASS,21,/home/ryreu/guided_cnn/logsWaterbird/smoke_debug_21047520/abn95_baseline.log
+abn100_baseline,PASS,20,/home/ryreu/guided_cnn/logsWaterbird/smoke_debug_21047520/abn100_baseline.log
+guided95_galsvit,FAIL,9,/home/ryreu/guided_cnn/logsWaterbird/smoke_debug_21047520/guided95_galsvit.log
+guided100_galsvit,FAIL,7,/home/ryreu/guided_cnn/logsWaterbird/smoke_debug_21047520/guided100_galsvit.log
+clip_lr95,FAIL,5,/home/ryreu/guided_cnn/logsWaterbird/smoke_debug_21047520/clip_lr95.log
+clip_lr100,FAIL,4,/home/ryreu/guided_cnn/logsWaterbird/smoke_debug_21047520/clip_lr100.log
+vanilla95,PASS,34,/home/ryreu/guided_cnn/logsWaterbird/smoke_debug_21047520/vanilla95.log
+vanilla100,PASS,30,/home/ryreu/guided_cnn/logsWaterbird/smoke_debug_21047520/vanilla100.log

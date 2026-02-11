@@ -393,7 +393,12 @@ def main():
     import torch
 
     clip = _try_import_clip()
-    model, preprocess = clip.load(args.clip_model, device=args.device)
+    # Prefer non-JIT loading for compatibility with older Torch/JIT combos on cluster images.
+    try:
+        model, preprocess = clip.load(args.clip_model, device=args.device, jit=False)
+    except TypeError:
+        # Some clip.load variants do not expose a jit kwarg.
+        model, preprocess = clip.load(args.clip_model, device=args.device)
 
     root, cfg, Waterbirds = _load_waterbirds(args.data_path)
 

@@ -76,7 +76,7 @@ class COCOABN(COCOGenderCNN):
             'balanced_val_acc'
         ]
 
-    def calc_loss(self, metrics, split, batch, inputs, output_dict, labels):
+    def calc_loss(self, metrics, split, batch, inputs, output_dict, labels, aux_losses=True):
         loss, metrics = lu.calc_loss(
             metrics=metrics,
             split=split,
@@ -86,7 +86,8 @@ class COCOABN(COCOGenderCNN):
             labels=labels,
             cfg=self.CFG,
             loss_cfg=self.loss_cfg,
-            device=self.device
+            device=self.device,
+            aux_losses=aux_losses,
         )
         return loss, metrics
 

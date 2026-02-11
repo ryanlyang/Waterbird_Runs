@@ -1,0 +1,34 @@
+/home/ryreu/miniconda3/envs/gals_a100/lib/python3.8/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and will be removed in 0.15, please use 'weights' instead.
+  warnings.warn(
+/home/ryreu/miniconda3/envs/gals_a100/lib/python3.8/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and will be removed in 0.15. The current behavior is equivalent to passing `weights=ResNet50_Weights.IMAGENET1K_V1`. You can also use `weights=ResNet50_Weights.DEFAULT` to get the most up-to-date weights.
+  warnings.warn(msg)
+
+=== RUN (GALS ViT GT): kl_lambda=1.0, attention_epoch=0 ===
+*** Attention epoch 0 reached: restarting optimizer (lr2_mult=1.0, base_lr=9.999999999999991e-05, classifier_lr=0.0010000000000000002) ***
+Epoch 1/1
+Traceback (most recent call last):
+  File "/home/ryreu/guided_cnn/waterbirds/Waterbird_Runs/run_guided_waterbird_gals_vitatt_sweep.py", line 280, in <module>
+    main()
+  File "/home/ryreu/guided_cnn/waterbirds/Waterbird_Runs/run_guided_waterbird_gals_vitatt_sweep.py", line 167, in main
+    row = run_trial(trial_id, args, rng, "random")
+  File "/home/ryreu/guided_cnn/waterbirds/Waterbird_Runs/run_guided_waterbird_gals_vitatt_sweep.py", line 69, in run_trial
+    best_balanced_val, test_acc, per_group, worst_group, ckpt = rgw.run_single(
+  File "/home/ryreu/guided_cnn/waterbirds/Waterbird_Runs/run_guided_waterbird_gals_vitatt.py", line 300, in run_single
+    best_model, best_score, best_epoch = base.train_model(
+  File "/home/ryreu/guided_cnn/waterbirds/Waterbird_Runs/run_guided_waterbird.py", line 327, in train_model
+    outputs, feats = model(inputs)
+  File "/home/ryreu/miniconda3/envs/gals_a100/lib/python3.8/site-packages/torch/nn/modules/module.py", line 1130, in _call_impl
+    return forward_call(*input, **kwargs)
+  File "/home/ryreu/guided_cnn/waterbirds/Waterbird_Runs/run_guided_waterbird.py", line 124, in forward
+    out = self.base(x)
+  File "/home/ryreu/miniconda3/envs/gals_a100/lib/python3.8/site-packages/torch/nn/modules/module.py", line 1130, in _call_impl
+    return forward_call(*input, **kwargs)
+  File "/home/ryreu/miniconda3/envs/gals_a100/lib/python3.8/site-packages/torchvision/models/resnet.py", line 285, in forward
+    return self._forward_impl(x)
+  File "/home/ryreu/miniconda3/envs/gals_a100/lib/python3.8/site-packages/torchvision/models/resnet.py", line 280, in _forward_impl
+    x = self.fc(x)
+  File "/home/ryreu/miniconda3/envs/gals_a100/lib/python3.8/site-packages/torch/nn/modules/module.py", line 1130, in _call_impl
+    return forward_call(*input, **kwargs)
+  File "/home/ryreu/miniconda3/envs/gals_a100/lib/python3.8/site-packages/torch/nn/modules/linear.py", line 114, in forward
+    return F.linear(input, self.weight, self.bias)
+RuntimeError: Deterministic behavior was enabled with either `torch.use_deterministic_algorithms(True)` or `at::Context::setDeterministicAlgorithms(true)`, but this operation is not deterministic because it uses CuBLAS and you have CUDA >= 10.2. To enable deterministic behavior in this case, you must set an environment variable before running your PyTorch application: CUBLAS_WORKSPACE_CONFIG=:4096:8 or CUBLAS_WORKSPACE_CONFIG=:16:8. For more information, go to https://docs.nvidia.com/cuda/cublas/index.html#cublasApi_reproducibility

@@ -34,6 +34,8 @@ SEED = 0
 
 
 def seed_everything(seed: int):
+    # Required by CUDA for deterministic GEMM kernels when deterministic algs are enabled.
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
     os.environ["PYTHONHASHSEED"] = str(seed)
     random.seed(seed)
     np.random.seed(seed)

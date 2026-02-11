@@ -685,6 +685,12 @@ def main():
             print(f"  balanced_test_acc: {m_bte:.2f} +/- {s_bte:.2f}", flush=True)
         print(f"[POST] Wrote: {post_csv}", flush=True)
 
+    if not sweep_rows:
+        raise RuntimeError(
+            "All sweep trials failed (no successful rows were recorded). "
+            "Check per-trial logs under --logs-dir for the first failing trace."
+        )
+
     print_runtime_summary("sweep", sweep_rows, cfg_num_epochs)
     if post_rows:
         print_runtime_summary("post_best_seeds", post_rows, cfg_num_epochs)
