@@ -18,7 +18,7 @@ import run_guided_waterbird as base
 
 # Fixed setup requested for Red Meat guided runs.
 batch_size = 96
-num_epochs = 150
+num_epochs = int(os.environ.get("GUIDED_NUM_EPOCHS", "150"))
 base_lr = 0.01
 classifier_lr = 0.01
 lr2_mult = 1.0
