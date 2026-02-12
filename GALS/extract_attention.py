@@ -52,8 +52,9 @@ elif args.DATA.DATASET == 'coco_gender':
     DATASET_KWARGS['compute_all'] = True
 elif args.DATA.DATASET == 'food_subset':
     from datasets.food import FoodSubset as Dataset
-    ROOT = os.path.join(args.DATA.ROOT, 'food-101')
-    SAVE_PATH = os.path.join(args.DATA.ROOT, 'food-101', args.SAVE_FOLDER)
+    food_subset_dir = getattr(args.DATA, "FOOD_SUBSET_DIR", "food-101")
+    ROOT = os.path.join(args.DATA.ROOT, food_subset_dir)
+    SAVE_PATH = os.path.join(args.DATA.ROOT, food_subset_dir, args.SAVE_FOLDER)
 else:
     raise NotImplementedError
 if not os.path.exists(SAVE_PATH):
@@ -204,5 +205,4 @@ def main(args):
 
 if __name__ == '__main__':
     main(args)
-
 

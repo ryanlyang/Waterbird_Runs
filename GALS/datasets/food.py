@@ -1,5 +1,6 @@
 import os
 import torch
+import torch.nn.functional as F
 from PIL import Image
 import numpy as np
 import pandas as pd
@@ -18,17 +19,20 @@ class FoodSubset(datasets.ImageFolder):
             target_transform=None,
             is_valid_file=None,
     ):
+        self.cfg = cfg
+        self.food_subset_dir = getattr(self.cfg.DATA, "FOOD_SUBSET_DIR", "food-101")
+        dataset_root = os.path.join(root, self.food_subset_dir)
+
         super().__init__(
-            f"{root}/food-101/train",
+            os.path.join(dataset_root, "train"),
             transform=transform,
             target_transform=target_transform,
             is_valid_file=is_valid_file
         )
 
-        self.cfg = cfg
         if self.cfg.DATA.CLASSES == None:
             self.classes = []
-            with open(f"{root}/food-101/meta/labels.txt") as f:
+            with open(os.path.join(dataset_root, "meta", "labels.txt")) as f:
                 for line in f:
                     self.classes.append(
                         line.replace('\n', '').replace(' ', '_').lower()
@@ -36,7 +40,7 @@ class FoodSubset(datasets.ImageFolder):
         else:
             self.classes = sorted(self.cfg.DATA.CLASSES)
         df = pd.read_csv(
-            os.path.join(self.cfg.DATA.ROOT,'food-101/meta/all_images.csv')
+            os.path.join(self.cfg.DATA.ROOT, self.food_subset_dir, "meta", "all_images.csv")
         )
         df = pd.concat(
             [df[df['label'] == c] for c in self.classes]
@@ -44,10 +48,11 @@ class FoodSubset(datasets.ImageFolder):
         self.df = df[df[self.cfg.DATA.SPLIT] == split]
         self.filename_array = self.df["abs_file_path"].values
         self.imgs = [
-            (f"{root}/food-101/{f}", self.classes.index(l)) for f, l in zip(self.df["abs_file_path"], self.df['label'])
+            (os.path.join(dataset_root, f), self.classes.index(l))
+            for f, l in zip(self.df["abs_file_path"], self.df['label'])
         ]
         self.data = np.array(
-            [f"{root}/food-101/{f}" for f in df["abs_file_path"]]
+            [os.path.join(dataset_root, f) for f in df["abs_file_path"]]
         )
         self.samples = self.imgs
         self.groups = [0 for i in range(len(self.imgs))]
@@ -61,7 +66,9 @@ class FoodSubset(datasets.ImageFolder):
                     os.path.join(
                         self.root.replace('/train', '').replace('/test', '').replace('/val', ''),
                         cfg.DATA.ATTENTION_DIR,
-                        path.replace('.jpg', '.pth')) for path in self.filename_array
+                        path.replace('.jpg', '.pth')
+                    )
+                    for path in self.filename_array
                 ]
             )
 
@@ -98,4 +105,3 @@ class FoodSubset(datasets.ImageFolder):
             'bbox': NULL,
             'attention': att,
         }
-
