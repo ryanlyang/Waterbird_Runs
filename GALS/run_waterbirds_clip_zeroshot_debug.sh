@@ -25,7 +25,59 @@ export NUMEXPR_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export PYTHONNOUSERSITE=1
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$SCRIPT_DIR"
+DEFAULT_REPO_ROOT="/home/ryreu/guided_cnn/waterbirds/Waterbird_Runs/GALS"
+
+resolve_repo_root() {
+  local cand
+
+  # Highest priority: explicit override
+  if [[ -n "${REPO_ROOT:-}" ]]; then
+    cand="$REPO_ROOT"
+    if [[ -f "$cand/run_clip_zeroshot_waterbirds.py" && -f "$cand/run_clip_zeroshot_redmeat.py" ]]; then
+      echo "$cand"
+      return 0
+    fi
+  fi
+
+  # Common case: submitted from Waterbird_Runs root
+  if [[ -n "${SLURM_SUBMIT_DIR:-}" ]]; then
+    cand="$SLURM_SUBMIT_DIR/GALS"
+    if [[ -f "$cand/run_clip_zeroshot_waterbirds.py" && -f "$cand/run_clip_zeroshot_redmeat.py" ]]; then
+      echo "$cand"
+      return 0
+    fi
+
+    # Submitted from within GALS already
+    cand="$SLURM_SUBMIT_DIR"
+    if [[ -f "$cand/run_clip_zeroshot_waterbirds.py" && -f "$cand/run_clip_zeroshot_redmeat.py" ]]; then
+      echo "$cand"
+      return 0
+    fi
+  fi
+
+  # Local execution (non-Slurm) from working copy
+  cand="$SCRIPT_DIR"
+  if [[ -f "$cand/run_clip_zeroshot_waterbirds.py" && -f "$cand/run_clip_zeroshot_redmeat.py" ]]; then
+    echo "$cand"
+    return 0
+  fi
+
+  # Final fallback: cluster canonical location
+  cand="$DEFAULT_REPO_ROOT"
+  if [[ -f "$cand/run_clip_zeroshot_waterbirds.py" && -f "$cand/run_clip_zeroshot_redmeat.py" ]]; then
+    echo "$cand"
+    return 0
+  fi
+
+  return 1
+}
+
+REPO_ROOT="$(resolve_repo_root || true)"
+if [[ -z "${REPO_ROOT:-}" ]]; then
+  echo "[ERROR] Could not locate repo root containing zero-shot scripts." >&2
+  echo "Checked REPO_ROOT, SLURM_SUBMIT_DIR/GALS, SLURM_SUBMIT_DIR, SCRIPT_DIR, and $DEFAULT_REPO_ROOT" >&2
+  exit 2
+fi
 
 WB95_PATH=${WB95_PATH:-/home/ryreu/guided_cnn/waterbirds/waterbird_complete95_forest2water2}
 WB100_PATH=${WB100_PATH:-/home/ryreu/guided_cnn/waterbirds/waterbird_1.0_forest2water2}
@@ -71,11 +123,11 @@ run_wb() {
     return 0
   fi
 
-  echo "\n=== [ZERO-SHOT] $tag ==="
+  printf "\n=== [ZERO-SHOT] %s ===\n" "$tag"
   echo "Data: $data_path"
   echo "Output: $out_csv"
 
-  srun --unbuffered python -u run_clip_zeroshot_waterbirds.py \
+  srun --unbuffered python -u "$REPO_ROOT/run_clip_zeroshot_waterbirds.py" \
     "$data_path" \
     --clip-model "$CLIP_MODEL" \
     --device "$DEVICE" \
@@ -95,11 +147,11 @@ run_redmeat() {
     return 0
   fi
 
-  echo "\n=== [ZERO-SHOT] REDMEAT ==="
+  printf "\n=== [ZERO-SHOT] REDMEAT ===\n"
   echo "Data: $data_path"
   echo "Output: $out_csv"
 
-  srun --unbuffered python -u run_clip_zeroshot_redmeat.py \
+  srun --unbuffered python -u "$REPO_ROOT/run_clip_zeroshot_redmeat.py" \
     "$data_path" \
     --clip-model "$CLIP_MODEL" \
     --device "$DEVICE" \
@@ -122,7 +174,7 @@ if [[ "$RUN_REDMEAT" -eq 1 ]]; then
   run_redmeat "$REDMEAT_PATH" "$OUT_REDMEAT"
 fi
 
-echo "\n[DONE] Zero-shot runs finished."
+printf "\n[DONE] Zero-shot runs finished.\n"
 echo "  WB95 CSV:    $OUT_WB95"
 echo "  WB100 CSV:   $OUT_WB100"
 echo "  RedMeat CSV: $OUT_REDMEAT"
