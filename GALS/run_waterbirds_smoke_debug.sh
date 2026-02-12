@@ -324,10 +324,9 @@ run_check guided95_galsvit \
   --num-epochs 1 \
   --attn-min 0 --attn-max 0 \
   --kl-min 1 --kl-max 1 \
-  --kl-incr-min 1 --kl-incr-max 1 \
   --base-lr-min 1e-4 --base-lr-max 1e-4 \
   --cls-lr-min 1e-3 --cls-lr-max 1e-3 \
-  --lr2-mult 1.0 \
+  --lr2-mult-min 1.0 --lr2-mult-max 1.0 \
   --post-seeds 0 \
   --output-csv "$SMOKE_DIR/guided95_galsvit.csv"
 
@@ -338,10 +337,9 @@ run_check guided100_galsvit \
   --num-epochs 1 \
   --attn-min 0 --attn-max 0 \
   --kl-min 1 --kl-max 1 \
-  --kl-incr-min 1 --kl-incr-max 1 \
   --base-lr-min 1e-4 --base-lr-max 1e-4 \
   --cls-lr-min 1e-3 --cls-lr-max 1e-3 \
-  --lr2-mult 1.0 \
+  --lr2-mult-min 1.0 --lr2-mult-max 1.0 \
   --post-seeds 0 \
   --output-csv "$SMOKE_DIR/guided100_galsvit.csv"
 
@@ -350,7 +348,7 @@ run_check clip_lr95 \
   python -u run_clip_lr_sweep.py \
   "$WB95_PATH" \
   --clip-model RN50 --device cuda \
-  --batch-size 512 --num-workers 4 \
+  --batch-size 512 --num-workers 0 \
   --sampler random --n-trials 1 --seed 0 \
   --C-min 1 --C-max 1 --max-iter 300 \
   --post-seeds 0 \
@@ -360,7 +358,7 @@ run_check clip_lr100 \
   python -u run_clip_lr_sweep.py \
   "$WB100_PATH" \
   --clip-model RN50 --device cuda \
-  --batch-size 512 --num-workers 4 \
+  --batch-size 512 --num-workers 0 \
   --sampler random --n-trials 1 --seed 0 \
   --C-min 1 --C-max 1 --max-iter 300 \
   --post-seeds 0 \
@@ -397,4 +395,3 @@ cat "$SUMMARY_CSV"
 if [[ "$FAIL" -gt 0 ]]; then
   exit 1
 fi
-
