@@ -56,13 +56,21 @@ redmeat_prepare_food_layout() {
 
   # GALS looks for food-101/meta/all_images.csv.
   mkdir -p "$dataset_root/meta"
-  # Support either metadata layout:
-  # 1) root/all_images.csv
-  # 2) meta/all_images.csv
-  if [[ -f "$dataset_root/all_images.csv" ]]; then
-    ln -sfn ../all_images.csv "$dataset_root/meta/all_images.csv"
-  elif [[ -f "$dataset_root/meta/all_images.csv" ]]; then
-    ln -sfn meta/all_images.csv "$dataset_root/all_images.csv"
+  # Support either metadata layout while avoiding symlink loops:
+  # 1) real file at root/all_images.csv
+  # 2) real file at meta/all_images.csv
+  local root_meta="$dataset_root/all_images.csv"
+  local meta_meta="$dataset_root/meta/all_images.csv"
+  if [[ -f "$root_meta" && ! -L "$root_meta" ]]; then
+    ln -sfn ../all_images.csv "$meta_meta"
+  elif [[ -f "$meta_meta" && ! -L "$meta_meta" ]]; then
+    ln -sfn meta/all_images.csv "$root_meta"
+  elif [[ -L "$root_meta" && -f "$root_meta" && ! -L "$meta_meta" && -f "$meta_meta" ]]; then
+    ln -sfn meta/all_images.csv "$root_meta"
+  elif [[ -L "$meta_meta" && -f "$meta_meta" && ! -L "$root_meta" && -f "$root_meta" ]]; then
+    ln -sfn ../all_images.csv "$meta_meta"
+  else
+    echo "[WARN] Could not locate a real all_images.csv file in $dataset_root or $dataset_root/meta" >&2
   fi
 
   # Some scripts initialize ImageFolder(".../train").
