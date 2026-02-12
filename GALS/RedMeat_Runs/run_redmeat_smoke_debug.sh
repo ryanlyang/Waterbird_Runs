@@ -16,7 +16,24 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/common_env.sh"
+COMMON_ENV_CANDIDATES=(
+  "${SCRIPT_DIR}/common_env.sh"
+  "${SBATCH_SUBMIT_DIR:-}/GALS/RedMeat_Runs/common_env.sh"
+  "/home/ryreu/guided_cnn/waterbirds/Waterbird_Runs/GALS/RedMeat_Runs/common_env.sh"
+  "/home/ryreu/guided_cnn/Food101/Waterbird_Runs/GALS/RedMeat_Runs/common_env.sh"
+)
+COMMON_ENV=""
+for candidate in "${COMMON_ENV_CANDIDATES[@]}"; do
+  if [[ -n "$candidate" && -f "$candidate" ]]; then
+    COMMON_ENV="$candidate"
+    break
+  fi
+done
+if [[ -z "$COMMON_ENV" ]]; then
+  echo "[ERROR] Could not locate common_env.sh" >&2
+  exit 2
+fi
+source "$COMMON_ENV"
 
 redmeat_set_defaults
 redmeat_activate_env
