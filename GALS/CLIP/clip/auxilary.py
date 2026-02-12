@@ -246,9 +246,12 @@ def multi_head_attention_forward(query: Tensor,
         attn_output_weights, dim=-1)
     attn_output_weights = F.dropout(attn_output_weights, p=dropout_p, training=training)
 
-    # use hooks for the attention weights if necessary
-    if attention_probs_forward_hook is not None and attention_probs_backwards_hook is not None:
+    # Use hooks for attention weights when requested.
+    # In pure inference/no-grad paths (e.g., zero-shot eval), the tensor does not
+    # require gradients, so registering a backward hook would throw.
+    if attention_probs_forward_hook is not None:
         attention_probs_forward_hook(attn_output_weights)
+    if attention_probs_backwards_hook is not None and attn_output_weights.requires_grad:
         attn_output_weights.register_hook(attention_probs_backwards_hook)
 
     attn_output = torch.bmm(attn_output_weights, v)
