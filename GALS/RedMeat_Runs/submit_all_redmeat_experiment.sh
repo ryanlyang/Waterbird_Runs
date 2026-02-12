@@ -10,8 +10,9 @@ set -Eeuo pipefail
 #   - RRR (same loss family, table-label variant)
 #   - GradCAM
 #   - ABN supervision (ABN_SUPERVISION)
-#   - Guided strategy sweep using ViT maps + post-best reruns on extra GT roots
+#   - Guided strategy sweep using ViT .pth maps as direct guidance
 # - Independent sweeps:
+#   - Guided strategy sweep using external PNG masks (+ post-best reruns on extra GT roots)
 #   - GALS with external PNG masks (ourmasks)
 #   - UpWeight baseline
 #   - ABN baseline
@@ -34,6 +35,7 @@ set -Eeuo pipefail
 #
 # Skips:
 #   SKIP_VIT_METHODS=1
+#   SKIP_GUIDED_GALSVIT=1
 #   SKIP_GUIDED=1
 #   SKIP_OURMASKS=1
 #   SKIP_BASELINES=1
@@ -111,9 +113,17 @@ else
   echo "[SUBMIT] SKIP_VIT_METHODS=1"
 fi
 
+if [[ "${SKIP_GUIDED_GALSVIT:-0}" -ne 1 ]]; then
+  echo "[SUBMIT] Guided strategy sweep using GALS ViT .pth attentions as guidance..."
+  j_guided_galsvit="$(sbatch --parsable --time="$SBATCH_TIME" --export="$EXPORT_SWEEP" ${depvit[@]:-} run_guided_redmeat_gals_vitatt_sweep.sh)"
+  echo "  guided_redmeat_galsvit: $j_guided_galsvit"
+else
+  echo "[SUBMIT] SKIP_GUIDED_GALSVIT=1"
+fi
+
 if [[ "${SKIP_GUIDED:-0}" -ne 1 ]]; then
-  echo "[SUBMIT] Guided strategy sweep using GALS ViT maps as GT source..."
-  j_guided="$(sbatch --parsable --time="$SBATCH_TIME" --export="$EXPORT_SWEEP" ${depvit[@]:-} run_guided_redmeat_sweep.sh)"
+  echo "[SUBMIT] Guided strategy sweep using external PNG masks..."
+  j_guided="$(submit_parsable run_guided_redmeat_sweep.sh)"
   echo "  guided_redmeat: $j_guided"
 else
   echo "[SUBMIT] SKIP_GUIDED=1"

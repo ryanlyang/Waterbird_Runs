@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 import argparse
-import copy
 import os
 import random
 import sys
-import time
 from datetime import datetime
 from pathlib import Path
 
@@ -13,27 +11,34 @@ import pandas as pd
 from PIL import Image
 
 import torch
-import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 
 
 # Import shared guided-CNN training/model utilities from the project root.
+GALS_ROOT = Path(__file__).resolve().parent.parent
+if str(GALS_ROOT) not in sys.path:
+    sys.path.insert(0, str(GALS_ROOT))
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 import run_guided_waterbird as base  # noqa: E402
 
+# Reuse RedMeat metadata dataset + test eval from the PNG-mask guided runner.
+from RedMeat_Runs import run_guided_redmeat as red_png  # noqa: E402
 
-batch_size = 96
-num_epochs = 150
-base_lr = 0.01
-classifier_lr = 0.01
-lr2_mult = 1.0
-momentum = 0.9
-weight_decay = 1e-5
 
-checkpoint_dir = "RedMeat_Guided_Checkpoints"
+batch_size = red_png.batch_size
+num_epochs = red_png.num_epochs
+base_lr = red_png.base_lr
+classifier_lr = red_png.classifier_lr
+lr2_mult = red_png.lr2_mult
+momentum = red_png.momentum
+weight_decay = red_png.weight_decay
+
+checkpoint_dir = "RedMeat_Guided_GALSViT_Checkpoints"
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 SEED = 0
 
@@ -45,46 +50,112 @@ def _resolve_img_path(data_root: str, rel_or_abs: str) -> str:
     return os.path.join(data_root, rel)
 
 
-def _sanitize_label(label: str) -> str:
-    return str(label).strip().replace(" ", "_").replace("/", "_").lower()
+def _to_rel_under_root(path_or_rel: str, root: str) -> str:
+    s = str(path_or_rel)
+    if os.path.isabs(s):
+        try:
+            rel = os.path.relpath(s, root)
+            if not rel.startswith(".."):
+                return rel
+        except Exception:
+            pass
+        return os.path.basename(s)
+    return s.lstrip("/")
 
 
-def _mask_candidates(mask_root: str, label_name: str, image_path: str):
-    base_name = os.path.splitext(os.path.basename(image_path))[0]
-    parent_name = os.path.basename(os.path.dirname(image_path)).replace(".", "_")
-    label_key = _sanitize_label(label_name)
+def _combine_prompt_attentions(att, combine: str):
+    # att can be [P,1,H,W], [1,H,W], [H,W]
+    if isinstance(att, np.ndarray):
+        att = torch.from_numpy(att)
+    att = att.float()
 
-    direct = [
-        f"{label_key}_{base_name}.png",
-        f"{label_key}_{base_name}.jpg",
-        f"{label_key}_{base_name}.jpeg",
-        f"{parent_name}_{base_name}.png",
-        f"{parent_name}_{base_name}.jpg",
-        f"{parent_name}_{base_name}.jpeg",
-        f"{base_name}.png",
-    ]
-    nested = [
-        os.path.join(label_key, f"{base_name}.png"),
-        os.path.join(label_key, f"{base_name}.jpg"),
-        os.path.join(label_key, f"{base_name}.jpeg"),
-        os.path.join(parent_name, f"{base_name}.png"),
-        os.path.join(parent_name, f"{base_name}.jpg"),
-        os.path.join(parent_name, f"{base_name}.jpeg"),
-    ]
+    if att.dim() == 2:
+        att = att.unsqueeze(0).unsqueeze(0)
+    elif att.dim() == 3:
+        att = att.unsqueeze(0)
 
-    for rel in direct + nested:
-        yield os.path.join(mask_root, rel)
+    if att.shape[0] == 1:
+        out = att
+    elif combine == "mean":
+        out = att.mean(dim=0, keepdim=True)
+    elif combine == "max":
+        out = att.max(dim=0, keepdim=True).values
+    else:
+        raise ValueError(f"Unsupported combine='{combine}' (expected mean|max)")
+
+    return out  # [1,1,H,W]
 
 
-class RedMeatMetadataDataset(Dataset):
+def load_gals_vit_attention(
+    pth_path: str,
+    *,
+    key: str = "unnormalized_attentions",
+    combine: str = "mean",
+    out_size: int = 224,
+    normalize_01: bool = True,
+    brighten: float = 1.0,
+):
+    d = torch.load(pth_path, map_location="cpu")
+    if key not in d:
+        raise KeyError(f"Missing key '{key}' in {pth_path}. Keys: {list(d.keys())}")
+
+    att = _combine_prompt_attentions(d[key], combine=combine)
+    att = torch.clamp(att, min=0.0)
+
+    if normalize_01:
+        mn = float(att.min())
+        mx = float(att.max())
+        if mx - mn > 1e-12:
+            att = (att - mn) / (mx - mn)
+        else:
+            att = torch.zeros_like(att)
+
+    if out_size is not None:
+        att = F.interpolate(att, size=(out_size, out_size), mode="bilinear", align_corners=False)
+
+    if brighten != 1.0:
+        att = torch.clamp(att * float(brighten), 0.0, 1.0 if normalize_01 else float("inf"))
+
+    return att[0]  # [1,H,W]
+
+
+def _attention_candidates(att_root: str, rel_path: str, img_path: str):
+    rel_no_ext = os.path.splitext(rel_path)[0]
+    yield os.path.join(att_root, rel_no_ext + ".pth")
+
+    # Fallbacks for layout differences.
+    img_name_no_ext = os.path.splitext(os.path.basename(img_path))[0]
+    yield os.path.join(att_root, img_name_no_ext + ".pth")
+
+    if rel_path.startswith("images/"):
+        yield os.path.join(att_root, os.path.splitext(rel_path[len("images/"):])[0] + ".pth")
+
+
+def _first_existing(paths):
+    seen = set()
+    for p in paths:
+        if p in seen:
+            continue
+        seen.add(p)
+        if os.path.exists(p):
+            return p
+    return None
+
+
+class RedMeatMetadataDatasetPthAttention(Dataset):
     def __init__(
         self,
         data_root: str,
         split: str,
         image_transform=None,
-        mask_root: str = None,
-        mask_transform=None,
-        return_mask: bool = False,
+        attention_root: str = None,
+        attention_subdir: str = "clip_vit_attention",
+        attention_key: str = "unnormalized_attentions",
+        attention_combine: str = "mean",
+        attention_size: int = 224,
+        attention_normalize_01: bool = True,
+        attention_brighten: float = 1.0,
+        return_attention: bool = True,
         return_path: bool = True,
         classes=None,
         split_col: str = "split",
@@ -93,10 +164,14 @@ class RedMeatMetadataDataset(Dataset):
     ):
         self.data_root = data_root
         self.image_transform = image_transform
-        self.mask_root = mask_root
-        self.mask_transform = mask_transform
-        self.return_mask = return_mask
+        self.return_attention = return_attention
         self.return_path = return_path
+
+        self.attention_key = attention_key
+        self.attention_combine = attention_combine
+        self.attention_size = attention_size
+        self.attention_normalize_01 = attention_normalize_01
+        self.attention_brighten = attention_brighten
 
         meta_path = os.path.join(self.data_root, "all_images.csv")
         if not os.path.exists(meta_path):
@@ -121,9 +196,28 @@ class RedMeatMetadataDataset(Dataset):
         if unknown:
             raise ValueError(f"Labels not in class list for split '{split}': {unknown}")
 
-        self.label_names = label_names
         self.labels = np.array([self.class_to_idx[x] for x in label_names], dtype=np.int64)
-        self.paths = [_resolve_img_path(self.data_root, p) for p in sdf[path_col].astype(str).tolist()]
+
+        rel_paths = [_to_rel_under_root(p, self.data_root) for p in sdf[path_col].astype(str).tolist()]
+        self.paths = [_resolve_img_path(self.data_root, p) for p in rel_paths]
+
+        if attention_root is None:
+            attention_root = os.path.join(self.data_root, attention_subdir)
+        self.attention_root = attention_root
+
+        self.att_paths = [
+            _first_existing(_attention_candidates(self.attention_root, rel_path, img_path))
+            for rel_path, img_path in zip(rel_paths, self.paths)
+        ]
+
+        if self.return_attention:
+            missing = [self.paths[i] for i, ap in enumerate(self.att_paths) if ap is None]
+            if missing:
+                preview = "\n  - ".join(missing[:5])
+                raise FileNotFoundError(
+                    f"Missing attention .pth for {len(missing)} samples under {self.attention_root}. "
+                    f"Example images with no .pth:\n  - {preview}"
+                )
 
     def __len__(self):
         return len(self.paths)
@@ -138,74 +232,24 @@ class RedMeatMetadataDataset(Dataset):
 
         out = [img, label]
 
-        if self.return_mask:
-            if self.mask_root is None:
-                raise ValueError("mask_root is required when return_mask=True")
-
-            label_name = self.label_names[idx]
-            mask_path = None
-            tried = []
-            for cand in _mask_candidates(self.mask_root, label_name, path):
-                tried.append(cand)
-                if os.path.exists(cand):
-                    mask_path = cand
-                    break
-            if mask_path is None:
-                preview = "\n  - ".join(tried[:6])
-                raise FileNotFoundError(
-                    f"No mask found for image '{path}'. Tried examples:\n  - {preview}"
-                )
-
-            mask = Image.open(mask_path).convert("L")
-            if self.mask_transform is not None:
-                mask = self.mask_transform(mask)
-            out.append(mask)
+        if self.return_attention:
+            att_path = self.att_paths[idx]
+            if att_path is None:
+                raise FileNotFoundError(f"Missing attention path for sample: {path}")
+            att = load_gals_vit_attention(
+                att_path,
+                key=self.attention_key,
+                combine=self.attention_combine,
+                out_size=self.attention_size,
+                normalize_01=self.attention_normalize_01,
+                brighten=self.attention_brighten,
+            )
+            out.append(att)
 
         if self.return_path:
             out.append(path)
 
         return tuple(out)
-
-
-def evaluate_test(model, test_loader, num_classes):
-    model.eval()
-    criterion = nn.CrossEntropyLoss()
-
-    total = 0
-    correct = 0
-    total_loss = 0.0
-    class_correct = np.zeros(num_classes, dtype=np.int64)
-    class_total = np.zeros(num_classes, dtype=np.int64)
-
-    with torch.no_grad():
-        for images, labels, _paths in test_loader:
-            images = images.to(device)
-            labels = labels.to(device).long()
-
-            outputs, _ = model(images)
-            loss = criterion(outputs, labels)
-            preds = outputs.argmax(dim=1)
-
-            total_loss += loss.item() * images.size(0)
-            correct += (preds == labels).sum().item()
-            total += images.size(0)
-
-            labels_cpu = labels.detach().cpu().numpy()
-            preds_cpu = preds.detach().cpu().numpy()
-            for cls in range(num_classes):
-                cls_mask = labels_cpu == cls
-                if np.any(cls_mask):
-                    class_correct[cls] += np.sum(preds_cpu[cls_mask] == labels_cpu[cls_mask])
-                    class_total[cls] += np.sum(cls_mask)
-
-    avg_loss = total_loss / max(total, 1)
-    acc = 100.0 * correct / max(total, 1)
-
-    cls_acc = class_correct / np.maximum(class_total, 1)
-    per_group = 100.0 * float(np.mean(cls_acc))
-    worst_group = 100.0 * float(np.min(cls_acc))
-
-    return avg_loss, acc, cls_acc * 100.0, per_group, worst_group
 
 
 def run_single(args, attn_epoch, kl_value, kl_increment=None):
@@ -232,34 +276,31 @@ def run_single(args, attn_epoch, kl_value, kl_increment=None):
             ]
         ),
     }
-    mask_transforms = {
-        "train": transforms.Compose(
-            [
-                transforms.Resize((224, 224)),
-                transforms.ToTensor(),
-                base.Brighten(8.0),
-            ]
-        )
-    }
 
     base.seed_everything(SEED)
     g = torch.Generator()
     g.manual_seed(SEED)
 
-    train_dataset = RedMeatMetadataDataset(
+    train_dataset = RedMeatMetadataDatasetPthAttention(
         data_root=args.data_path,
         split="train",
         image_transform=data_transforms["train"],
-        mask_root=args.gt_path,
-        mask_transform=mask_transforms["train"],
-        return_mask=use_attention,
+        attention_root=args.att_path,
+        attention_subdir=getattr(args, "att_subdir", "clip_vit_attention"),
+        attention_key=getattr(args, "att_key", "unnormalized_attentions"),
+        attention_combine=getattr(args, "att_combine", "mean"),
+        attention_size=224,
+        attention_normalize_01=bool(getattr(args, "att_norm01", True)),
+        attention_brighten=float(getattr(args, "att_brighten", 1.0)),
+        return_attention=use_attention,
         return_path=True,
         classes=args.classes,
         split_col=args.split_col,
         label_col=args.label_col,
         path_col=args.path_col,
     )
-    val_dataset = RedMeatMetadataDataset(
+
+    val_dataset = red_png.RedMeatMetadataDataset(
         data_root=args.data_path,
         split="val",
         image_transform=data_transforms["eval"],
@@ -270,7 +311,8 @@ def run_single(args, attn_epoch, kl_value, kl_increment=None):
         label_col=args.label_col,
         path_col=args.path_col,
     )
-    test_dataset = RedMeatMetadataDataset(
+
+    test_dataset = red_png.RedMeatMetadataDataset(
         data_root=args.data_path,
         split="test",
         image_transform=data_transforms["eval"],
@@ -322,7 +364,7 @@ def run_single(args, attn_epoch, kl_value, kl_increment=None):
     if save_checkpoints:
         os.makedirs(checkpoint_dir, exist_ok=True)
 
-    print(f"\n=== RUN: kl_lambda={kl_value}, attention_epoch={attn_epoch} ===", flush=True)
+    print(f"\n=== RUN (RedMeat GALS ViT GT): kl_lambda={kl_value}, attention_epoch={attn_epoch} ===", flush=True)
     if kl_increment is None:
         kl_increment = kl_value / 10.0
 
@@ -342,7 +384,7 @@ def run_single(args, attn_epoch, kl_value, kl_increment=None):
     )
     print(f"\n[VAL] Best Balanced Acc: {best_score:.4f} at epoch {best_epoch}")
 
-    test_loss, test_acc, class_acc, per_group, worst_group = evaluate_test(best_model, test_loader, num_classes)
+    test_loss, test_acc, class_acc, per_group, worst_group = red_png.evaluate_test(best_model, test_loader, num_classes)
     print(f"\n[TEST] Loss: {test_loss:.4f}  Acc: {test_acc:.2f}%")
     for cls_name, acc in zip(train_dataset.classes, class_acc):
         print(f"[TEST] {cls_name}: {acc:.2f}%")
@@ -350,7 +392,7 @@ def run_single(args, attn_epoch, kl_value, kl_increment=None):
 
     if save_checkpoints:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        save_name = f"resnet50_redmeat_final_kl{int(kl_value)}_attn{attn_epoch}_{ts}.pth"
+        save_name = f"resnet50_redmeat_galsvit_final_kl{int(kl_value)}_attn{attn_epoch}_{ts}.pth"
         save_path = os.path.join(checkpoint_dir, save_name)
         torch.save(best_model.state_dict(), save_path)
     else:
@@ -369,9 +411,12 @@ def run_single(args, attn_epoch, kl_value, kl_increment=None):
 def main():
     global SEED, base_lr, classifier_lr, lr2_mult, num_epochs, checkpoint_dir
 
-    p = argparse.ArgumentParser(description="Guided RedMeat runner (ResNet50 + KL guidance to GT masks).")
+    p = argparse.ArgumentParser(
+        description="Guided RedMeat runner using GALS ViT .pth attentions as guidance masks."
+    )
     p.add_argument("data_path", help="RedMeat dataset root containing all_images.csv")
-    p.add_argument("gt_path", help="GT mask root (expects class_image flat naming by default)")
+    p.add_argument("att_path", help="Root folder containing GALS ViT attention .pth files")
+
     p.add_argument("--seed", type=int, default=SEED)
     p.add_argument("--attention-epoch", type=int, default=num_epochs)
     p.add_argument("--kl-lambda", type=float, default=0.0)
@@ -381,6 +426,11 @@ def main():
     p.add_argument("--lr2-mult", type=float, default=lr2_mult)
     p.add_argument("--num-epochs", type=int, default=num_epochs)
     p.add_argument("--checkpoint-dir", default=checkpoint_dir)
+
+    p.add_argument("--att-key", default="unnormalized_attentions", choices=["unnormalized_attentions", "attentions"])
+    p.add_argument("--att-combine", default="mean", choices=["mean", "max"])
+    p.add_argument("--att-norm01", action="store_true", default=True)
+    p.add_argument("--att-brighten", type=float, default=1.0)
 
     p.add_argument("--split-col", default="split")
     p.add_argument("--label-col", default="label")
@@ -400,16 +450,24 @@ def main():
     num_epochs = int(args.num_epochs)
     checkpoint_dir = str(args.checkpoint_dir)
 
+    if num_epochs < 1:
+        raise ValueError("--num-epochs must be >= 1")
+
     classes = [c.strip() for c in str(args.classes).split(",") if c.strip()] if args.classes else None
 
     run_args = argparse.Namespace(
         data_path=args.data_path,
-        gt_path=args.gt_path,
+        att_path=args.att_path,
+        att_key=args.att_key,
+        att_combine=args.att_combine,
+        att_norm01=args.att_norm01,
+        att_brighten=args.att_brighten,
         split_col=args.split_col,
         label_col=args.label_col,
         path_col=args.path_col,
         classes=classes,
     )
+
     run_single(run_args, int(args.attention_epoch), float(args.kl_lambda), args.kl_increment)
 
 

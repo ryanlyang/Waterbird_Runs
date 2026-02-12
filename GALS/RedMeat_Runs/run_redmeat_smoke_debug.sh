@@ -192,6 +192,20 @@ run_check guided \
   --lr2-mult 1.0 \
   --checkpoint-dir "$SMOKE_DIR/guided_ckpts"
 
+run_check guided_galsvit \
+  python -u RedMeat_Runs/run_guided_redmeat_gals_vitatt.py \
+  "$DATASET_ROOT" \
+  "$VIT_ATT_DIR" \
+  --seed 0 \
+  --num-epochs 1 \
+  --attention-epoch 0 \
+  --kl-lambda 10 \
+  --kl-increment 1 \
+  --base_lr "$BASE_LR" \
+  --classifier_lr "$CLS_LR" \
+  --lr2-mult 1.0 \
+  --checkpoint-dir "$SMOKE_DIR/guided_galsvit_ckpts"
+
 # Single-trial CLIP+LR check (kept tiny; no post-seed reruns).
 run_check clip_lr \
   python -u RedMeat_Runs/run_clip_lr_sweep_redmeat.py \
@@ -218,4 +232,3 @@ echo "Logs: $SMOKE_DIR"
 if (( FAIL > 0 )); then
   exit 1
 fi
-
