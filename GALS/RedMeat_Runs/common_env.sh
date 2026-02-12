@@ -73,6 +73,64 @@ redmeat_prepare_food_layout() {
     echo "[WARN] Could not locate a real all_images.csv file in $dataset_root or $dataset_root/meta" >&2
   fi
 
+  # If metadata is still missing (or broken), rebuild it from split_images.
+  if [[ ! -f "$root_meta" ]]; then
+    if [[ -d "$dataset_root/split_images/train" && -d "$dataset_root/split_images/val" && -d "$dataset_root/split_images/test" ]]; then
+      echo "[INFO] Rebuilding $root_meta from split_images/{train,val,test} ..."
+      python - "$dataset_root" "$root_meta" <<'PY'
+import csv
+import os
+import sys
+
+dataset_root, out_csv = sys.argv[1], sys.argv[2]
+split_root = os.path.join(dataset_root, "split_images")
+images_root = os.path.join(dataset_root, "images")
+
+rows = []
+for split in ("train", "val", "test"):
+    split_dir = os.path.join(split_root, split)
+    if not os.path.isdir(split_dir):
+        continue
+    for label in sorted(os.listdir(split_dir)):
+        label_dir = os.path.join(split_dir, label)
+        if not os.path.isdir(label_dir):
+            continue
+        for fname in sorted(os.listdir(label_dir)):
+            if not fname.lower().endswith((".jpg", ".jpeg", ".png")):
+                continue
+            # Prefer canonical images/ path when present.
+            canonical = os.path.join(images_root, label, fname)
+            if os.path.isfile(canonical):
+                rel_path = os.path.join("images", label, fname)
+            else:
+                rel_path = os.path.relpath(os.path.join(label_dir, fname), dataset_root)
+            rows.append(
+                {
+                    "abs_file_path": rel_path.replace("\\", "/"),
+                    "label": str(label),
+                    "split": str(split),
+                }
+            )
+
+if not rows:
+    raise SystemExit("No image rows found under split_images; cannot rebuild all_images.csv")
+
+tmp_csv = out_csv + ".tmp"
+with open(tmp_csv, "w", newline="") as f:
+    w = csv.DictWriter(f, fieldnames=["abs_file_path", "label", "split"])
+    w.writeheader()
+    w.writerows(rows)
+os.replace(tmp_csv, out_csv)
+PY
+      ln -sfn ../all_images.csv "$meta_meta"
+    fi
+  fi
+
+  if [[ ! -f "$root_meta" ]]; then
+    echo "[ERROR] Missing metadata file: $root_meta" >&2
+    return 2
+  fi
+
   # Some scripts initialize ImageFolder(".../train").
   if [[ ! -e "$dataset_root/train" && -d "$dataset_root/images" ]]; then
     ln -s "images" "$dataset_root/train"
