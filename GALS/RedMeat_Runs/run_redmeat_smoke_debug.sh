@@ -1,0 +1,221 @@
+#!/bin/bash -l
+# Smoke-test RedMeat strategies used by submit_all_redmeat_experiment.sh.
+# Runs tiny checks in debug partition to validate end-to-end wiring.
+
+#SBATCH --account=reu-aisocial
+#SBATCH --partition=debug
+#SBATCH --gres=gpu:a100:1
+#SBATCH --time=0-23:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=12
+#SBATCH --mem=64G
+#SBATCH --output=/home/ryreu/guided_cnn/logsRedMeat/redmeat_smoke_debug_%j.out
+#SBATCH --error=/home/ryreu/guided_cnn/logsRedMeat/redmeat_smoke_debug_%j.err
+#SBATCH --signal=TERM@120
+
+set -Eeuo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/common_env.sh"
+
+redmeat_set_defaults
+redmeat_activate_env
+redmeat_prepare_food_layout "$DATA_ROOT" "$DATA_DIR"
+
+RUNS_ROOT="$PROJECT_ROOT"
+REPO_ROOT="$GALS_ROOT"
+DATASET_ROOT="$DATA_ROOT/$DATA_DIR"
+META_CSV="$DATASET_ROOT/all_images.csv"
+VIT_ATT_DIR="$DATASET_ROOT/clip_vit_attention"
+ABN_WEIGHT="$REPO_ROOT/weights/resnet50_abn_imagenet.pth.tar"
+MASK_DIR=${MASK_DIR:-/home/ryreu/guided_cnn/Food101/LearningToLook/code/WeCLIPPlus/results_redmeat_openai_dinovit/val/prediction_cmap/}
+
+LOG_ROOT="$LOG_DIR"
+SMOKE_DIR="$LOG_ROOT/redmeat_smoke_debug_${SLURM_JOB_ID}"
+mkdir -p "$SMOKE_DIR"
+SUMMARY_CSV="$SMOKE_DIR/summary.csv"
+echo "name,status,seconds,log" > "$SUMMARY_CSV"
+
+cd "$REPO_ROOT"
+export PYTHONPATH="$RUNS_ROOT:$REPO_ROOT:${PYTHONPATH:-}"
+export WANDB_DISABLED=true
+export SAVE_CHECKPOINTS=0
+
+if [[ -z "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+  export CUDA_VISIBLE_DEVICES=0
+fi
+
+for p in "$RUNS_ROOT" "$REPO_ROOT" "$DATASET_ROOT" "$VIT_ATT_DIR" "$MASK_DIR"; do
+  if [[ ! -d "$p" ]]; then
+    echo "[ERROR] Missing required directory: $p" >&2
+    exit 2
+  fi
+done
+if [[ ! -f "$META_CSV" ]]; then
+  echo "[ERROR] Missing metadata file: $META_CSV" >&2
+  exit 2
+fi
+if [[ ! -f "$ABN_WEIGHT" ]]; then
+  echo "[ERROR] Missing ABN pretrained weight: $ABN_WEIGHT" >&2
+  exit 2
+fi
+
+PASS=0
+FAIL=0
+
+run_check() {
+  local name="$1"
+  shift
+  local log="$SMOKE_DIR/${name}.log"
+  local t0 t1 dt status
+  t0="$(date +%s)"
+  echo "===== [SMOKE] $name ====="
+  if "$@" >"$log" 2>&1; then
+    status="PASS"
+    PASS=$((PASS + 1))
+  else
+    status="FAIL"
+    FAIL=$((FAIL + 1))
+  fi
+  t1="$(date +%s)"
+  dt=$((t1 - t0))
+  echo "$name,$status,$dt,$log" >> "$SUMMARY_CSV"
+  echo "[SMOKE] $name => $status (${dt}s)"
+}
+
+# Shared tiny settings.
+BASE_LR=1e-4
+CLS_LR=1e-3
+WD=1e-5
+BATCH=16
+
+COMMON_OVR=(
+  "DATA.ROOT=$DATA_ROOT"
+  "DATA.FOOD_SUBSET_DIR=$DATA_DIR"
+  "DATA.SUBDIR=$DATA_DIR"
+  "DATA.BATCH_SIZE=$BATCH"
+  "EXP.NUM_EPOCHS=1"
+  "EXP.AUX_LOSSES_ON_VAL=False"
+  "LOGGING.SAVE_BEST=False"
+  "LOGGING.SAVE_LAST=False"
+)
+
+run_check gals_vit \
+  python -u main.py --config RedMeat_Runs/configs/redmeat_gals_vit.yaml --name smoke_gals_vit \
+  "${COMMON_OVR[@]}" \
+  "SEED=0" \
+  "EXP.BASE.LR=$BASE_LR" \
+  "EXP.CLASSIFIER.LR=$CLS_LR" \
+  "EXP.WEIGHT_DECAY=$WD" \
+  "EXP.LOSSES.GRADIENT_OUTSIDE.WEIGHT=10"
+
+run_check rrr_vit \
+  python -u main.py --config RedMeat_Runs/configs/redmeat_rrr_vit.yaml --name smoke_rrr_vit \
+  "${COMMON_OVR[@]}" \
+  "SEED=0" \
+  "EXP.BASE.LR=$BASE_LR" \
+  "EXP.CLASSIFIER.LR=$CLS_LR" \
+  "EXP.WEIGHT_DECAY=$WD" \
+  "EXP.LOSSES.GRADIENT_OUTSIDE.WEIGHT=10"
+
+run_check gradcam_vit \
+  python -u main.py --config RedMeat_Runs/configs/redmeat_gradcam_vit.yaml --name smoke_gradcam_vit \
+  "${COMMON_OVR[@]}" \
+  "SEED=0" \
+  "EXP.BASE.LR=$BASE_LR" \
+  "EXP.CLASSIFIER.LR=$CLS_LR" \
+  "EXP.WEIGHT_DECAY=$WD" \
+  "EXP.LOSSES.GRADCAM.WEIGHT=1"
+
+run_check abn_vit \
+  python -u main.py --config RedMeat_Runs/configs/redmeat_abn_vit.yaml --name smoke_abn_vit \
+  "${COMMON_OVR[@]}" \
+  "SEED=0" \
+  "EXP.BASE.LR=$BASE_LR" \
+  "EXP.CLASSIFIER.LR=$CLS_LR" \
+  "EXP.WEIGHT_DECAY=$WD" \
+  "EXP.LOSSES.ABN_SUPERVISION.WEIGHT=1"
+
+run_check gals_ourmasks \
+  python -u main.py --config RedMeat_Runs/configs/redmeat_gals_ourmasks.yaml --name smoke_gals_ourmasks \
+  "${COMMON_OVR[@]}" \
+  "SEED=0" \
+  "DATA.SEGMENTATION_DIR=$MASK_DIR" \
+  "DATA.SEG_TRAIN_ONLY=True" \
+  "EXP.BASE.LR=$BASE_LR" \
+  "EXP.CLASSIFIER.LR=$CLS_LR" \
+  "EXP.WEIGHT_DECAY=$WD" \
+  "EXP.LOSSES.GRADIENT_OUTSIDE.WEIGHT=10"
+
+run_check upweight \
+  python -u main.py --config RedMeat_Runs/configs/redmeat_upweight.yaml --name smoke_upweight \
+  "${COMMON_OVR[@]}" \
+  "SEED=0" \
+  "EXP.BASE.LR=$BASE_LR" \
+  "EXP.CLASSIFIER.LR=$CLS_LR" \
+  "EXP.WEIGHT_DECAY=$WD"
+
+run_check abn_baseline \
+  python -u main.py --config RedMeat_Runs/configs/redmeat_abn.yaml --name smoke_abn_baseline \
+  "${COMMON_OVR[@]}" \
+  "SEED=0" \
+  "EXP.BASE.LR=$BASE_LR" \
+  "EXP.CLASSIFIER.LR=$CLS_LR" \
+  "EXP.WEIGHT_DECAY=$WD" \
+  "EXP.LOSSES.ABN_CLASSIFICATION.WEIGHT=1"
+
+run_check vanilla_cnn \
+  python -u RedMeat_Runs/run_vanilla_redmeat.py \
+  "$DATASET_ROOT" \
+  --model resnet50 \
+  --pretrained \
+  --batch-size "$BATCH" \
+  --num-epochs 1 \
+  --num-workers 4 \
+  --lr "$BASE_LR" \
+  --momentum 0.9 \
+  --weight-decay "$WD" \
+  --seed 0 \
+  --checkpoint-dir "$SMOKE_DIR/vanilla_ckpts"
+
+run_check guided \
+  python -u RedMeat_Runs/run_guided_redmeat.py \
+  "$DATASET_ROOT" \
+  "$MASK_DIR" \
+  --seed 0 \
+  --num-epochs 1 \
+  --attention-epoch 0 \
+  --kl-lambda 10 \
+  --kl-increment 1 \
+  --base-lr "$BASE_LR" \
+  --classifier-lr "$CLS_LR" \
+  --lr2-mult 1.0 \
+  --checkpoint-dir "$SMOKE_DIR/guided_ckpts"
+
+# Single-trial CLIP+LR check (kept tiny; no post-seed reruns).
+run_check clip_lr \
+  python -u RedMeat_Runs/run_clip_lr_sweep_redmeat.py \
+  "$DATASET_ROOT" \
+  --clip-model RN50 \
+  --device cuda \
+  --batch-size 128 \
+  --num-workers 4 \
+  --n-trials 1 \
+  --sampler random \
+  --seed 0 \
+  --C-min 1e-4 \
+  --C-max 1e-4 \
+  --max-iter 200 \
+  --post-seeds 0 \
+  --output-csv "$SMOKE_DIR/clip_lr_smoke.csv"
+
+echo
+echo "===== [SMOKE] SUMMARY ====="
+cat "$SUMMARY_CSV"
+echo "PASS=$PASS FAIL=$FAIL"
+echo "Logs: $SMOKE_DIR"
+
+if (( FAIL > 0 )); then
+  exit 1
+fi
+

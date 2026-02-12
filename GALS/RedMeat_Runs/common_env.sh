@@ -2,7 +2,8 @@
 set -Eeuo pipefail
 
 # Canonical roots (cluster)
-PROJECT_ROOT_DEFAULT=/home/ryreu/guided_cnn/Food101/Waterbird_Runs
+# Use the active Waterbird_Runs checkout by default; RedMeat data still lives under Food101/data.
+PROJECT_ROOT_DEFAULT=/home/ryreu/guided_cnn/waterbirds/Waterbird_Runs
 GALS_ROOT_DEFAULT="${PROJECT_ROOT_DEFAULT}/GALS"
 DATA_ROOT_DEFAULT=/home/ryreu/guided_cnn/Food101/data
 DATA_DIR_DEFAULT=food-101-redmeat
