@@ -8,6 +8,10 @@ import numpy as np
 from PIL import Image
 import pandas as pd
 
+# Needed when deterministic algorithms are enabled on CUDA (e.g., guided runs).
+if "CUBLAS_WORKSPACE_CONFIG" not in os.environ:
+    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset

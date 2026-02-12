@@ -78,8 +78,8 @@ POST_SEED_START=${POST_SEED_START:-0}
 POST_KEEP=${POST_KEEP:-all}
 
 # Search ranges (log-scale):
-BASE_LR_MIN=${BASE_LR_MIN:-1e-4}
-BASE_LR_MAX=${BASE_LR_MAX:-5e-2}
+BASE_LR_MIN=${BASE_LR_MIN:-1e-6}
+BASE_LR_MAX=${BASE_LR_MAX:-1e-3}
 CLS_LR_MIN=${CLS_LR_MIN:-1e-5}
 CLS_LR_MAX=${CLS_LR_MAX:-1e-2}
 WEIGHT_DECAY_MIN=${WEIGHT_DECAY_MIN:-1e-6}
@@ -146,4 +146,3 @@ fi
 srun --unbuffered python -u run_gals_sweep.py "${ARGS[@]}" \
   DATA.FOOD_SUBSET_DIR="$DATA_DIR" \
   DATA.SUBDIR="$DATA_DIR"
-

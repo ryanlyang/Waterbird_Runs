@@ -24,6 +24,7 @@ conda activate "$ENV_NAME"
 
 export TF_CPP_MIN_LOG_LEVEL=3
 export TF_ENABLE_ONEDNN_OPTS=0
+export CUBLAS_WORKSPACE_CONFIG=:4096:8
 export WANDB_DISABLED=true
 export SAVE_CHECKPOINTS=0
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
@@ -179,8 +180,6 @@ run_step "Guided RedMeat sweep smoke" \
     --attn-max 0 \
     --kl-min 10.0 \
     --kl-max 10.0 \
-    --kl-incr-min 1.0 \
-    --kl-incr-max 1.0 \
     --base-lr-min 1e-4 \
     --base-lr-max 1e-4 \
     --cls-lr-min 1e-4 \

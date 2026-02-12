@@ -66,7 +66,7 @@ SWEEP_GT_ROOT=${SWEEP_GT_ROOT:-/home/ryreu/guided_cnn/Food101/LearningToLook/cod
 # Extra GT paths (used only for best-seed reruns)
 ALT1_GT_ROOT=${ALT1_GT_ROOT:-/home/ryreu/guided_cnn/Food101/LearningToLook/code/WeCLIPPlus/results_redmeat_openai_xcit/val/prediction_cmap/}
 ALT2_GT_ROOT=${ALT2_GT_ROOT:-/home/ryreu/guided_cnn/Food101/LearningToLook/code/WeCLIPPlus/results_redmeat_openclip_dinovit/val/prediction_cmap/}
-ALT3_GT_ROOT=${ALT3_GT_ROOT:-/home/ryreu/guided_cnn/Food101/LearningToLook/code/WeCLIPPlus/results_redmeat_siglip2_dinovit/val/prediction_cmap/}
+# ALT3_GT_ROOT=${ALT3_GT_ROOT:-/home/ryreu/guided_cnn/Food101/LearningToLook/code/WeCLIPPlus/results_redmeat_siglip2_dinovit/val/prediction_cmap/}
 
 N_TRIALS=${N_TRIALS:-50}
 SWEEP_SEED=${SWEEP_SEED:-0}
@@ -84,7 +84,7 @@ if [[ ! -f "$DATA_ROOT/meta/all_images.csv" ]]; then
   echo "Missing DATA_ROOT metadata: $DATA_ROOT/meta/all_images.csv" >&2
   exit 1
 fi
-for p in "$SWEEP_GT_ROOT" "$ALT1_GT_ROOT" "$ALT2_GT_ROOT" "$ALT3_GT_ROOT"; do
+for p in "$SWEEP_GT_ROOT" "$ALT1_GT_ROOT" "$ALT2_GT_ROOT"; do
   if [[ ! -d "$p" ]]; then
     echo "Missing GT root: $p" >&2
     exit 1
@@ -102,7 +102,7 @@ echo "Data: $DATA_ROOT"
 echo "Primary GT (tune + best5): $SWEEP_GT_ROOT"
 echo "Extra GT #1: $ALT1_GT_ROOT"
 echo "Extra GT #2: $ALT2_GT_ROOT"
-echo "Extra GT #3: $ALT3_GT_ROOT"
+# echo "Extra GT #3: $ALT3_GT_ROOT"
 echo "Trials: $N_TRIALS (sampler=$SAMPLER seed=$SWEEP_SEED)"
 echo "Post seeds: $POST_SEEDS (start=$POST_SEED_START)"
 echo "Sweep CSV: $SWEEP_OUT"
@@ -114,7 +114,6 @@ srun --unbuffered python -u run_waterbirds/run_guided_redmeat_sweep.py \
   "$SWEEP_GT_ROOT" \
   --extra-gt-path "$ALT1_GT_ROOT" \
   --extra-gt-path "$ALT2_GT_ROOT" \
-  --extra-gt-path "$ALT3_GT_ROOT" \
   --n-trials "$N_TRIALS" \
   --seed "$SWEEP_SEED" \
   --sampler "$SAMPLER" \

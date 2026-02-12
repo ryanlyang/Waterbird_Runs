@@ -43,17 +43,18 @@ def run_trial(trial_id, args, rng, sampler_name):
     if sampler_name == "random":
         attn_epoch = int(rng.integers(args.attn_min, args.attn_max + 1))
         kl_lambda = loguniform(rng, args.kl_min, args.kl_max)
-        kl_incr = loguniform(rng, args.kl_incr_min, args.kl_incr_max)
         base_lr = loguniform(rng, args.base_lr_min, args.base_lr_max)
         classifier_lr = loguniform(rng, args.cls_lr_min, args.cls_lr_max)
         lr2_mult = loguniform(rng, args.lr2_mult_min, args.lr2_mult_max)
     else:
         attn_epoch = int(args.trial.suggest_int("attention_epoch", args.attn_min, args.attn_max))
         kl_lambda = float(args.trial.suggest_float("kl_lambda", args.kl_min, args.kl_max, log=True))
-        kl_incr = float(args.trial.suggest_float("kl_incr", args.kl_incr_min, args.kl_incr_max, log=True))
         base_lr = float(args.trial.suggest_float("base_lr", args.base_lr_min, args.base_lr_max, log=True))
         classifier_lr = float(args.trial.suggest_float("classifier_lr", args.cls_lr_min, args.cls_lr_max, log=True))
         lr2_mult = float(args.trial.suggest_float("lr2_mult", args.lr2_mult_min, args.lr2_mult_max, log=True))
+
+    # Fixed policy: KL increment is derived from KL lambda, not swept.
+    kl_incr = 0.1 * kl_lambda
 
     rgw.base_lr = base_lr
     rgw.classifier_lr = classifier_lr
@@ -197,12 +198,10 @@ def main():
     parser.add_argument("--attn-min", type=int, default=0)
     parser.add_argument("--attn-max", type=int, default=rgw.num_epochs - 1)
     parser.add_argument("--kl-min", type=float, default=1.0)
-    parser.add_argument("--kl-max", type=float, default=300.0)
-    parser.add_argument("--kl-incr-min", type=float, default=1e-1)
-    parser.add_argument("--kl-incr-max", type=float, default=30.0)
-    parser.add_argument("--base-lr-min", type=float, default=1e-5)
+    parser.add_argument("--kl-max", type=float, default=500.0)
+    parser.add_argument("--base-lr-min", type=float, default=1e-6)
     parser.add_argument("--base-lr-max", type=float, default=1e-3)
-    parser.add_argument("--cls-lr-min", type=float, default=1e-4)
+    parser.add_argument("--cls-lr-min", type=float, default=1e-5)
     parser.add_argument("--cls-lr-max", type=float, default=1e-2)
     parser.add_argument("--lr2-mult-min", type=float, default=1e-1)
     parser.add_argument("--lr2-mult-max", type=float, default=3.0)
