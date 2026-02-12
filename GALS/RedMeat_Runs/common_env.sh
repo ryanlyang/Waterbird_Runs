@@ -56,8 +56,13 @@ redmeat_prepare_food_layout() {
 
   # GALS looks for food-101/meta/all_images.csv.
   mkdir -p "$dataset_root/meta"
+  # Support either metadata layout:
+  # 1) root/all_images.csv
+  # 2) meta/all_images.csv
   if [[ -f "$dataset_root/all_images.csv" ]]; then
     ln -sfn ../all_images.csv "$dataset_root/meta/all_images.csv"
+  elif [[ -f "$dataset_root/meta/all_images.csv" ]]; then
+    ln -sfn meta/all_images.csv "$dataset_root/all_images.csv"
   fi
 
   # Some scripts initialize ImageFolder(".../train").
