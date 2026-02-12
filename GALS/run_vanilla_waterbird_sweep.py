@@ -120,8 +120,8 @@ def main():
     p.add_argument("--num-workers", type=int, default=4)
     p.add_argument("--checkpoint-dir", default="Vanilla_Checkpoints")
 
-    p.add_argument("--lr-min", type=float, default=3e-5)
-    p.add_argument("--lr-max", type=float, default=3e-2)
+    p.add_argument("--lr-min", type=float, default=1e-6)
+    p.add_argument("--lr-max", type=float, default=1e-2)
     p.add_argument("--wd-min", type=float, default=1e-7)
     p.add_argument("--wd-max", type=float, default=1e-3)
     p.add_argument("--momentum-min", type=float, default=0.80)

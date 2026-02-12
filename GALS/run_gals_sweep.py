@@ -288,8 +288,8 @@ def main():
     parser.add_argument("--abn-cls-weight-max", type=float, default=10.0, help="Max for ABN_CLASSIFICATION weight (abn_cls)")
     parser.add_argument("--abn-att-weight-min", type=float, default=0.1, help="Min for ABN_SUPERVISION weight (abn_att)")
     parser.add_argument("--abn-att-weight-max", type=float, default=10.0, help="Max for ABN_SUPERVISION weight (abn_att)")
-    parser.add_argument("--base-lr-min", type=float, default=1e-4)
-    parser.add_argument("--base-lr-max", type=float, default=5e-2)
+    parser.add_argument("--base-lr-min", type=float, default=1e-6)
+    parser.add_argument("--base-lr-max", type=float, default=1e-3)
     parser.add_argument("--cls-lr-min", type=float, default=1e-5)
     parser.add_argument("--cls-lr-max", type=float, default=1e-2)
     parser.add_argument(
