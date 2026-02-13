@@ -20,7 +20,9 @@ _PENALTY_SOLVER_BASE_CHOICES = [
     ("l1", "saga", None),
     ("elasticnet", "saga", "suggest"),
 ]
-_PENALTY_SOLVER_SPEC_DEFAULT = "l2:lbfgs,l2:liblinear,l2:saga,l1:liblinear,l1:saga,elasticnet:saga"
+# RedMeat multi-class CLIP+LR has shown sporadic native crashes with liblinear on some nodes.
+# Keep liblinear as an opt-in via --penalty-solvers, but default to stable solvers.
+_PENALTY_SOLVER_SPEC_DEFAULT = "l2:lbfgs,l2:saga,l1:saga,elasticnet:saga"
 
 
 def _repo_root() -> Path:

@@ -49,6 +49,7 @@ OBJECTIVE=${OBJECTIVE:-val_avg_group_acc}
 C_MIN=${C_MIN:-1e-6}
 C_MAX=${C_MAX:-1e4}
 MAX_ITER=${MAX_ITER:-5000}
+PENALTY_SOLVERS=${PENALTY_SOLVERS:-l2:lbfgs,l2:saga,l1:saga,elasticnet:saga}
 POST_SEEDS=${POST_SEEDS:-5}
 POST_SEED_START=${POST_SEED_START:-0}
 
@@ -82,6 +83,7 @@ echo "Repo: $REPO_ROOT"
 echo "Data: $DATASET_ROOT"
 echo "CLIP model: $CLIP_MODEL"
 echo "Trials: $N_TRIALS (sampler=$SAMPLER seed=$SWEEP_SEED objective=$OBJECTIVE)"
+echo "Penalty/solvers: $PENALTY_SOLVERS"
 echo "Output CSV: $OUT_CSV"
 echo "Post seeds: $POST_SEEDS (start=$POST_SEED_START)"
 echo "Post output CSV: $POST_OUT_CSV"
@@ -100,6 +102,7 @@ srun --unbuffered python -u RedMeat_Runs/run_clip_lr_sweep_redmeat.py \
   --C-min "$C_MIN" \
   --C-max "$C_MAX" \
   --max-iter "$MAX_ITER" \
+  --penalty-solvers "$PENALTY_SOLVERS" \
   --objective "$OBJECTIVE" \
   --post-seeds "$POST_SEEDS" \
   --post-seed-start "$POST_SEED_START" \

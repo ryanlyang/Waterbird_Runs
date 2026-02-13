@@ -288,7 +288,7 @@ else
     --n-trials 1 \
     --sampler random \
     --seed 0 \
-    --penalty-solvers l2:liblinear \
+    --penalty-solvers l2:lbfgs \
     --C-min 1e-4 \
     --C-max 1e-4 \
     --max-iter 200 \

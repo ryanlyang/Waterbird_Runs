@@ -1,0 +1,26 @@
+/home/ryreu/miniconda3/envs/gals_a100/lib/python3.8/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and will be removed in 0.15, please use 'weights' instead.
+  warnings.warn(
+/home/ryreu/miniconda3/envs/gals_a100/lib/python3.8/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and will be removed in 0.15. The current behavior is equivalent to passing `weights=ResNet50_Weights.IMAGENET1K_V1`. You can also use `weights=ResNet50_Weights.DEFAULT` to get the most up-to-date weights.
+  warnings.warn(msg)
+
+=== RUN (RedMeat GALS ViT GT): kl_lambda=10.0, attention_epoch=0 ===
+*** Attention epoch 0 reached: restarting optimizer (lr2_mult=1.0, base_lr=0.0001, classifier_lr=0.001) ***
+Epoch 1/1
+train Loss: 6.5008 Acc: 0.2900 Attn_Loss: 0.4907
+val Loss: 1.4605 Acc: 0.4504 Attn_Loss: 0.0000
+val Balanced Acc: 0.4504
+val Optim Num: 0.4504
+
+Training complete in 0m 11s
+
+[VAL] Best Balanced Acc: 0.4504 at epoch 0
+
+[TEST] Loss: 1.4394  Acc: 49.12%
+[TEST] prime_rib: 75.60%
+[TEST] pork_chop: 56.40%
+[TEST] steak: 41.60%
+[TEST] baby_back_ribs: 71.60%
+[TEST] filet_mignon: 0.40%
+[TEST] Per-class mean: 49.12%  Worst-class: 0.40%
+[RUN DONE] Checkpoint saving disabled via SAVE_CHECKPOINTS=0
+[RUN DONE] kl=10.0 attn=0 lr2_mult=1.0 kl_incr=1.0 | best_balanced_val_acc=0.4504 | test_acc=49.12% | saved: NONE
