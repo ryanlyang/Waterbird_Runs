@@ -47,6 +47,7 @@ ABN_WEIGHT=/home/ryreu/guided_cnn/waterbirds/Waterbird_Runs/GALS/weights/resnet5
 
 GUIDED_GALSVIT_SWEEP_PY="$RUNS_ROOT/run_guided_waterbird_gals_vitatt_sweep.py"
 SKIP_RN50_PATH_SMOKE=${SKIP_RN50_PATH_SMOKE:-1}
+SKIP_GUIDED_RN50_SMOKE=${SKIP_GUIDED_RN50_SMOKE:-0}
 
 LOG_ROOT=/home/ryreu/guided_cnn/logsWaterbird
 SMOKE_DIR="$LOG_ROOT/smoke_debug_${SLURM_JOB_ID}"
@@ -360,6 +361,40 @@ run_check guided100_galsvit \
   --lr2-mult-min 1.0 --lr2-mult-max 1.0 \
   --post-seeds 0 \
   --output-csv "$SMOKE_DIR/guided100_galsvit.csv"
+
+if [[ "$SKIP_GUIDED_RN50_SMOKE" -eq 1 ]]; then
+  skip_check guided95_galsrn50 "SKIP_GUIDED_RN50_SMOKE=1"
+  skip_check guided100_galsrn50 "SKIP_GUIDED_RN50_SMOKE=1"
+elif [[ ! -d "$WB95_RN50_ATT" || ! -d "$WB100_RN50_ATT" ]]; then
+  skip_check guided95_galsrn50 "missing RN50 attention path(s)"
+  skip_check guided100_galsrn50 "missing RN50 attention path(s)"
+else
+  run_check guided95_galsrn50 \
+    python -u "$GUIDED_GALSVIT_SWEEP_PY" \
+    "$WB95_PATH" "$WB95_RN50_ATT" \
+    --sampler random --n-trials 1 --seed 0 \
+    --num-epochs 1 \
+    --attn-min 0 --attn-max 0 \
+    --kl-min 1 --kl-max 1 \
+    --base-lr-min 1e-4 --base-lr-max 1e-4 \
+    --cls-lr-min 1e-3 --cls-lr-max 1e-3 \
+    --lr2-mult-min 1.0 --lr2-mult-max 1.0 \
+    --post-seeds 0 \
+    --output-csv "$SMOKE_DIR/guided95_galsrn50.csv"
+
+  run_check guided100_galsrn50 \
+    python -u "$GUIDED_GALSVIT_SWEEP_PY" \
+    "$WB100_PATH" "$WB100_RN50_ATT" \
+    --sampler random --n-trials 1 --seed 0 \
+    --num-epochs 1 \
+    --attn-min 0 --attn-max 0 \
+    --kl-min 1 --kl-max 1 \
+    --base-lr-min 1e-4 --base-lr-max 1e-4 \
+    --cls-lr-min 1e-3 --cls-lr-max 1e-3 \
+    --lr2-mult-min 1.0 --lr2-mult-max 1.0 \
+    --post-seeds 0 \
+    --output-csv "$SMOKE_DIR/guided100_galsrn50.csv"
+fi
 
 # 3) CLIP+LR and Vanilla-CNN tiny smoke checks (both datasets).
 run_check clip_lr95 \

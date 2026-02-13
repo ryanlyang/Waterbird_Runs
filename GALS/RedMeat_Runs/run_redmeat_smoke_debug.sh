@@ -44,6 +44,7 @@ REPO_ROOT="$GALS_ROOT"
 DATASET_ROOT="$DATA_ROOT/$DATA_DIR"
 META_CSV="$DATASET_ROOT/all_images.csv"
 VIT_ATT_DIR="$DATASET_ROOT/clip_vit_attention"
+RN50_ATT_DIR="$DATASET_ROOT/clip_rn50_attention_gradcam"
 ABN_WEIGHT="$REPO_ROOT/weights/resnet50_abn_imagenet.pth.tar"
 MASK_DIR=${MASK_DIR:-/home/ryreu/guided_cnn/Food101/LearningToLook/code/WeCLIPPlus/results_redmeat_openai_dinovit/val/prediction_cmap/}
 SIGLIP2_MASK_DIR=${SIGLIP2_MASK_DIR:-/home/ryreu/guided_cnn/Food101/LearningToLook/code/WeCLIPPlus/results_redmeat_siglip2_dinovit/val/prediction_cmap/}
@@ -65,7 +66,7 @@ if [[ -z "${CUDA_VISIBLE_DEVICES:-}" ]]; then
   export CUDA_VISIBLE_DEVICES=0
 fi
 
-for p in "$RUNS_ROOT" "$REPO_ROOT" "$DATASET_ROOT" "$VIT_ATT_DIR" "$MASK_DIR"; do
+for p in "$RUNS_ROOT" "$REPO_ROOT" "$DATASET_ROOT" "$VIT_ATT_DIR" "$RN50_ATT_DIR" "$MASK_DIR"; do
   if [[ ! -d "$p" ]]; then
     echo "[ERROR] Missing required directory: $p" >&2
     exit 2
@@ -235,6 +236,20 @@ run_check guided_galsvit \
   --classifier_lr "$CLS_LR" \
   --lr2-mult 1.0 \
   --checkpoint-dir "$SMOKE_DIR/guided_galsvit_ckpts"
+
+run_check guided_galsrn50 \
+  python -u RedMeat_Runs/run_guided_redmeat_gals_vitatt.py \
+  "$DATASET_ROOT" \
+  "$RN50_ATT_DIR" \
+  --seed 0 \
+  --num-epochs 1 \
+  --attention-epoch 0 \
+  --kl-lambda 10 \
+  --kl-increment 1 \
+  --base_lr "$BASE_LR" \
+  --classifier_lr "$CLS_LR" \
+  --lr2-mult 1.0 \
+  --checkpoint-dir "$SMOKE_DIR/guided_galsrn50_ckpts"
 
 # Optional guided smoke against SigLIP2 WeCLIP masks.
 # Default is skip since that mask path may not be available yet.
