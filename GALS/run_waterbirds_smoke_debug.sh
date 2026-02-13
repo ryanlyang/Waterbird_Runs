@@ -345,21 +345,25 @@ run_check guided100_galsvit \
 
 # 3) CLIP+LR and Vanilla-CNN tiny smoke checks (both datasets).
 run_check clip_lr95 \
+  env OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \
   python -u run_clip_lr_sweep.py \
   "$WB95_PATH" \
   --clip-model RN50 --device cuda \
   --batch-size 512 --num-workers 0 \
   --sampler random --n-trials 1 --seed 0 \
+  --penalty-solvers l2:lbfgs \
   --C-min 1 --C-max 1 --max-iter 300 \
   --post-seeds 0 \
   --output-csv "$SMOKE_DIR/clip_lr95.csv"
 
 run_check clip_lr100 \
+  env OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \
   python -u run_clip_lr_sweep.py \
   "$WB100_PATH" \
   --clip-model RN50 --device cuda \
   --batch-size 512 --num-workers 0 \
   --sampler random --n-trials 1 --seed 0 \
+  --penalty-solvers l2:lbfgs \
   --C-min 1 --C-max 1 --max-iter 300 \
   --post-seeds 0 \
   --output-csv "$SMOKE_DIR/clip_lr100.csv"

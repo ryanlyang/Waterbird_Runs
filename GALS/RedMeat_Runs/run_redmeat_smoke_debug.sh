@@ -225,6 +225,7 @@ run_check guided_galsvit \
 
 # Single-trial CLIP+LR check (kept tiny; no post-seed reruns).
 run_check clip_lr \
+  env OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \
   python -u RedMeat_Runs/run_clip_lr_sweep_redmeat.py \
   "$DATASET_ROOT" \
   --clip-model RN50 \
@@ -234,6 +235,7 @@ run_check clip_lr \
   --n-trials 1 \
   --sampler random \
   --seed 0 \
+  --penalty-solvers l2:lbfgs \
   --C-min 1e-4 \
   --C-max 1e-4 \
   --max-iter 200 \

@@ -1,0 +1,11 @@
+usage: run_guided_redmeat.py [-h] [--seed SEED]
+                             [--attention-epoch ATTENTION_EPOCH]
+                             [--kl-lambda KL_LAMBDA]
+                             [--kl-increment KL_INCREMENT] [--base_lr BASE_LR]
+                             [--classifier_lr CLASSIFIER_LR]
+                             [--lr2-mult LR2_MULT] [--num-epochs NUM_EPOCHS]
+                             [--checkpoint-dir CHECKPOINT_DIR]
+                             [--split-col SPLIT_COL] [--label-col LABEL_COL]
+                             [--path-col PATH_COL] [--classes CLASSES]
+                             data_path gt_path
+run_guided_redmeat.py: error: unrecognized arguments: --base-lr 1e-4 --classifier-lr 1e-3

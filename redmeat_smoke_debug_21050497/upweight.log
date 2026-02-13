@@ -1,0 +1,149 @@
+SEED: 0
+DATA:
+  BATCH_SIZE: 16
+  NUM_WORKERS: 4
+  SIZE: 224
+  NORMALIZATION: imagenet
+  ATTENTION_DIR: NONE
+  SEPARATE_CLASSES: false
+  REMOVE_BACKGROUND: false
+  ROOT: /home/ryreu/guided_cnn/Food101/data
+  USE_CLASS_WEIGHTS: true
+  USE_GROUP_WEIGHTS: false
+  DATASET: food_subset
+  NUM_CLASSES: 5
+  CLASSES:
+  - prime_rib
+  - pork_chop
+  - steak
+  - baby_back_ribs
+  - filet_mignon
+  SPLIT: split
+  FOOD_SUBSET_DIR: food-101-redmeat
+  SUBDIR: food-101-redmeat
+EXP:
+  NUM_TRIALS: 1
+  LOSSES:
+    CLASSIFICATION:
+      WEIGHT: 1
+    GRADIENT_OUTSIDE:
+      COMPUTE: false
+      LOG: false
+      WEIGHT: 0.01
+      CRITERION: L1
+      GT: segmentation
+      COMBINE_ATT_MODE: average_nonzero
+    GRADIENT_INSIDE:
+      COMPUTE: false
+      LOG: false
+      WEIGHT: 1
+      CRITERION: L1
+      GT: segmentation
+      COMBINE_ATT_MODE: average_nonzero
+    GRADCAM:
+      COMPUTE: false
+      LOG: false
+      WEIGHT: 1
+      CRITERION: L1
+      GT: segmentation
+      MODE: match
+      COMBINE_ATT_MODE: average_nonzero
+  APPROACH: generic
+  MODEL: resnet50
+  PRETRAINED: true
+  NUM_EPOCHS: 1
+  OPTIMIZER: SGD
+  WEIGHT_DECAY: 1.0e-05
+  MOMENTUM: 0.9
+  SCHEDULER: NONE
+  BASE:
+    LR: 0.0001
+  CLASSIFIER:
+    LR: 0.001
+  AUX_LOSSES_ON_VAL: false
+LOGGING:
+  SAVE_EVERY: 0
+  SAVE_BEST: false
+  SAVE_LAST: false
+  LOG_ATTENTION: false
+  LOG_ATTENTION_STEP: 10
+  SAVE_STATS_PATH: null
+yaml: RedMeat_Runs/configs/redmeat_upweight.yaml
+name: smoke_upweight
+test_checkpoint: null
+
+NUM TRAIN: 2500
+
+NUM VAL:   1250
+
+Number classifier outputs: 5
+Using pretrained model: True
+USING SGD OPTIMIZER
+class weights: None
+group weights: None
+WANDB DISABLED: skipping wandb.init()
+EPOCH: 0
+
+>>> TRAINING 
+
+  0%|          | 0/157 [00:00<?, ?it/s]  1%|          | 1/157 [00:02<07:11,  2.77s/it]  3%|▎         | 4/157 [00:02<01:26,  1.77it/s]  4%|▍         | 7/157 [00:03<00:43,  3.49it/s]  6%|▋         | 10/157 [00:03<00:26,  5.50it/s]  8%|▊         | 13/157 [00:03<00:18,  7.73it/s] 10%|█         | 16/157 [00:03<00:14, 10.06it/s] 12%|█▏        | 19/157 [00:03<00:11, 12.36it/s] 14%|█▍        | 22/157 [00:03<00:09, 14.45it/s] 16%|█▌        | 25/157 [00:03<00:08, 16.28it/s] 18%|█▊        | 28/157 [00:03<00:07, 17.79it/s] 20%|█▉        | 31/157 [00:04<00:06, 18.99it/s] 22%|██▏       | 34/157 [00:04<00:06, 19.94it/s] 24%|██▎       | 37/157 [00:04<00:05, 20.47it/s] 25%|██▌       | 40/157 [00:04<00:05, 20.94it/s] 27%|██▋       | 43/157 [00:04<00:05, 21.30it/s] 29%|██▉       | 46/157 [00:04<00:05, 21.63it/s] 31%|███       | 49/157 [00:04<00:04, 21.90it/s] 33%|███▎      | 52/157 [00:05<00:04, 21.96it/s] 35%|███▌      | 55/157 [00:05<00:04, 21.92it/s] 37%|███▋      | 58/157 [00:05<00:04, 22.00it/s] 39%|███▉      | 61/157 [00:05<00:04, 21.99it/s] 41%|████      | 64/157 [00:05<00:04, 22.01it/s] 43%|████▎     | 67/157 [00:05<00:04, 22.10it/s] 45%|████▍     | 70/157 [00:05<00:03, 22.06it/s] 46%|████▋     | 73/157 [00:06<00:03, 22.03it/s] 48%|████▊     | 76/157 [00:06<00:03, 22.01it/s] 50%|█████     | 79/157 [00:06<00:03, 22.16it/s] 52%|█████▏    | 82/157 [00:06<00:03, 21.94it/s] 54%|█████▍    | 85/157 [00:06<00:03, 22.17it/s] 56%|█████▌    | 88/157 [00:06<00:03, 21.94it/s] 58%|█████▊    | 91/157 [00:06<00:02, 22.22it/s] 60%|█████▉    | 94/157 [00:06<00:02, 22.00it/s] 62%|██████▏   | 97/157 [00:07<00:02, 22.04it/s] 64%|██████▎   | 100/157 [00:07<00:02, 22.12it/s] 66%|██████▌   | 103/157 [00:07<00:02, 22.03it/s] 68%|██████▊   | 106/157 [00:07<00:02, 22.03it/s] 69%|██████▉   | 109/157 [00:07<00:02, 22.23it/s] 71%|███████▏  | 112/157 [00:07<00:02, 22.24it/s] 73%|███████▎  | 115/157 [00:07<00:01, 22.19it/s] 75%|███████▌  | 118/157 [00:08<00:01, 22.26it/s] 77%|███████▋  | 121/157 [00:08<00:01, 22.15it/s] 79%|███████▉  | 124/157 [00:08<00:01, 21.75it/s] 81%|████████  | 127/157 [00:08<00:01, 21.96it/s] 83%|████████▎ | 130/157 [00:08<00:01, 22.09it/s] 85%|████████▍ | 133/157 [00:08<00:01, 22.15it/s] 87%|████████▋ | 136/157 [00:08<00:00, 22.04it/s] 89%|████████▊ | 139/157 [00:09<00:00, 22.12it/s] 90%|█████████ | 142/157 [00:09<00:00, 21.97it/s] 92%|█████████▏| 145/157 [00:09<00:00, 22.10it/s] 94%|█████████▍| 148/157 [00:09<00:00, 22.22it/s] 96%|█████████▌| 151/157 [00:09<00:00, 22.51it/s] 98%|█████████▊| 154/157 [00:09<00:00, 22.79it/s]100%|██████████| 157/157 [00:09<00:00, 22.72it/s]100%|██████████| 157/157 [00:09<00:00, 15.95it/s]
+>>> VALIDATING 
+
+  0%|          | 0/79 [00:00<?, ?it/s]  1%|▏         | 1/79 [00:00<00:27,  2.82it/s]  8%|▊         | 6/79 [00:00<00:04, 15.55it/s] 14%|█▍        | 11/79 [00:00<00:02, 24.11it/s] 19%|█▉        | 15/79 [00:00<00:02, 28.39it/s] 25%|██▌       | 20/79 [00:00<00:01, 33.22it/s] 32%|███▏      | 25/79 [00:00<00:01, 34.36it/s] 38%|███▊      | 30/79 [00:01<00:01, 37.02it/s] 44%|████▍     | 35/79 [00:01<00:01, 38.71it/s] 51%|█████     | 40/79 [00:01<00:00, 40.15it/s] 57%|█████▋    | 45/79 [00:01<00:00, 40.68it/s] 63%|██████▎   | 50/79 [00:01<00:00, 40.14it/s] 70%|██████▉   | 55/79 [00:01<00:00, 41.25it/s] 76%|███████▌  | 60/79 [00:01<00:00, 41.79it/s] 82%|████████▏ | 65/79 [00:01<00:00, 42.59it/s] 89%|████████▊ | 70/79 [00:02<00:00, 41.69it/s] 95%|█████████▍| 75/79 [00:02<00:00, 42.11it/s]100%|██████████| 79/79 [00:02<00:00, 34.86it/s]
+>>> LOGGING 
+
+BALANCED ACCS CHECKED FOR TRAIN
+BALANCED ACCS CHECKED FOR VAL
+train_acc: 0.394
+val_acc: 0.4984
+train_cls_loss: 1.402177638053894
+val_cls_loss: 1.202654909515381
+train_total_loss: 1.402177638053894
+val_total_loss: 1.202654909515381
+balanced_train_acc: 0.394
+balanced_val_acc: 0.4984
+train_acc_baby_back_ribs: 0.554
+train_acc_filet_mignon: 0.328
+train_acc_pork_chop: 0.342
+train_acc_prime_rib: 0.538
+train_acc_steak: 0.208
+val_acc_baby_back_ribs: 0.476
+val_acc_filet_mignon: 0.3
+val_acc_pork_chop: 0.356
+val_acc_prime_rib: 0.696
+val_acc_steak: 0.664
+TRAIN ACC:        0.394
+VAL ACC:          0.4984
+BALANCED VAL ACC: 0.4984
+>>> EVALUATING ON TEST SET
+NUM TEST:   1250
+
+Traceback (most recent call last):
+  File "/home/ryreu/miniconda3/envs/gals_a100/lib/python3.8/site-packages/torch/serialization.py", line 308, in _check_seekable
+    f.seek(f.tell())
+AttributeError: 'NoneType' object has no attribute 'seek'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "main.py", line 205, in <module>
+    main(args)
+  File "main.py", line 150, in main
+    test_metrics = test(args, transform, approach, mean, std)
+  File "main.py", line 200, in test
+    metrics = approach.test(test_dataloader, args.test_checkpoint)
+  File "/home/ryreu/guided_cnn/waterbirds/Waterbird_Runs/GALS/approaches/base.py", line 442, in test
+    self.load_checkpoint(checkpoint_file)
+  File "/home/ryreu/guided_cnn/waterbirds/Waterbird_Runs/GALS/approaches/base.py", line 196, in load_checkpoint
+    checkpoint = torch.load(checkpoint_file)
+  File "/home/ryreu/miniconda3/envs/gals_a100/lib/python3.8/site-packages/torch/serialization.py", line 699, in load
+    with _open_file_like(f, 'rb') as opened_file:
+  File "/home/ryreu/miniconda3/envs/gals_a100/lib/python3.8/site-packages/torch/serialization.py", line 235, in _open_file_like
+    return _open_buffer_reader(name_or_buffer)
+  File "/home/ryreu/miniconda3/envs/gals_a100/lib/python3.8/site-packages/torch/serialization.py", line 220, in __init__
+    _check_seekable(buffer)
+  File "/home/ryreu/miniconda3/envs/gals_a100/lib/python3.8/site-packages/torch/serialization.py", line 311, in _check_seekable
+    raise_err_msg(["seek", "tell"], e)
+  File "/home/ryreu/miniconda3/envs/gals_a100/lib/python3.8/site-packages/torch/serialization.py", line 304, in raise_err_msg
+    raise type(e)(msg)
+AttributeError: 'NoneType' object has no attribute 'seek'. You can only torch.load from a file that is seekable. Please pre-load the data into a buffer like io.BytesIO and try to load from it instead.

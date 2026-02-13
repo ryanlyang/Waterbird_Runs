@@ -6,9 +6,20 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
+
+
+_PENALTY_SOLVER_BASE_CHOICES = [
+    ("l2", "lbfgs", None),
+    ("l2", "liblinear", None),
+    ("l2", "saga", None),
+    ("l1", "liblinear", None),
+    ("l1", "saga", None),
+    ("elasticnet", "saga", "suggest"),
+]
+_PENALTY_SOLVER_SPEC_DEFAULT = "l2:lbfgs,l2:liblinear,l2:saga,l1:liblinear,l1:saga,elasticnet:saga"
 
 
 def _repo_root() -> Path:
@@ -156,31 +167,45 @@ def _extract_features(
     return X, y, grp
 
 
-def _suggest_penalty_solver(trial) -> Tuple[str, str, Optional[float]]:
-    # Keep the search space small and valid for sklearn LogisticRegression.
-    choices = [
-        ("l2", "lbfgs", None),
-        ("l2", "liblinear", None),
-        ("l2", "saga", None),
-        ("l1", "liblinear", None),
-        ("l1", "saga", None),
-        ("elasticnet", "saga", "suggest"),
-    ]
+def _parse_penalty_solver_choices(spec: str) -> List[Tuple[str, str, Optional[str]]]:
+    allowed_pairs = {(p, s) for p, s, _ in _PENALTY_SOLVER_BASE_CHOICES}
+    out: List[Tuple[str, str, Optional[str]]] = []
+    seen = set()
+    for tok in str(spec).split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        if ":" not in tok:
+            raise ValueError(
+                f"Invalid penalty-solver token '{tok}'. Expected '<penalty>:<solver>' (e.g., l2:lbfgs)."
+            )
+        penalty, solver = [x.strip() for x in tok.split(":", 1)]
+        key = (penalty, solver)
+        if key not in allowed_pairs:
+            raise ValueError(
+                f"Unsupported penalty/solver pair '{penalty}:{solver}'. "
+                "Allowed: l2:lbfgs, l2:liblinear, l2:saga, l1:liblinear, l1:saga, elasticnet:saga"
+            )
+        if key in seen:
+            continue
+        seen.add(key)
+        if key == ("elasticnet", "saga"):
+            out.append((penalty, solver, "suggest"))
+        else:
+            out.append((penalty, solver, None))
+    if not out:
+        raise ValueError("No valid penalty/solver choices parsed from --penalty-solvers.")
+    return out
+
+
+def _suggest_penalty_solver(trial, choices) -> Tuple[str, str, Optional[float]]:
     penalty, solver, l1_ratio = trial.suggest_categorical("penalty_solver", choices)
     if l1_ratio == "suggest":
         l1_ratio = float(trial.suggest_float("l1_ratio", 0.05, 0.95))
     return str(penalty), str(solver), l1_ratio
 
 
-def _sample_penalty_solver_random(rng: np.random.Generator) -> Tuple[str, str, Optional[float]]:
-    choices = [
-        ("l2", "lbfgs", None),
-        ("l2", "liblinear", None),
-        ("l2", "saga", None),
-        ("l1", "liblinear", None),
-        ("l1", "saga", None),
-        ("elasticnet", "saga", "suggest"),
-    ]
+def _sample_penalty_solver_random(rng: np.random.Generator, choices) -> Tuple[str, str, Optional[float]]:
     penalty, solver, l1_ratio = choices[int(rng.integers(0, len(choices)))]
     if l1_ratio == "suggest":
         l1_ratio = float(rng.uniform(0.05, 0.95))
@@ -207,11 +232,11 @@ def _run_trial(
     if sampler == "random":
         C = float(np.exp(rng.uniform(np.log(args.C_min), np.log(args.C_max))))
         fit_intercept = bool(rng.integers(0, 2))
-        penalty, solver, l1_ratio = _sample_penalty_solver_random(rng)
+        penalty, solver, l1_ratio = _sample_penalty_solver_random(rng, args.penalty_solver_choices)
     else:
         C = float(args.trial.suggest_float("C", args.C_min, args.C_max, log=True))
         fit_intercept = bool(args.trial.suggest_categorical("fit_intercept", [True, False]))
-        penalty, solver, l1_ratio = _suggest_penalty_solver(args.trial)
+        penalty, solver, l1_ratio = _suggest_penalty_solver(args.trial, args.penalty_solver_choices)
 
     clf_kwargs = dict(
         random_state=args.seed,
@@ -348,6 +373,14 @@ def main():
     p.add_argument("--C-min", type=float, default=1e-6)
     p.add_argument("--C-max", type=float, default=1e4)
     p.add_argument("--max-iter", type=int, default=5000)
+    p.add_argument(
+        "--penalty-solvers",
+        default=_PENALTY_SOLVER_SPEC_DEFAULT,
+        help=(
+            "Comma-separated LogisticRegression penalty:solver pairs to search over. "
+            "Allowed: l2:lbfgs,l2:liblinear,l2:saga,l1:liblinear,l1:saga,elasticnet:saga"
+        ),
+    )
     p.add_argument("--post-seeds", type=int, default=5)
     p.add_argument("--post-seed-start", type=int, default=0)
     p.add_argument("--post-output-csv", default=None)
@@ -358,6 +391,7 @@ def main():
         help="Which validation metric to maximize.",
     )
     args = p.parse_args()
+    args.penalty_solver_choices = _parse_penalty_solver_choices(args.penalty_solvers)
 
     header = [
         "trial",
