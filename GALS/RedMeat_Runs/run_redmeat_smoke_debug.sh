@@ -46,6 +46,8 @@ META_CSV="$DATASET_ROOT/all_images.csv"
 VIT_ATT_DIR="$DATASET_ROOT/clip_vit_attention"
 ABN_WEIGHT="$REPO_ROOT/weights/resnet50_abn_imagenet.pth.tar"
 MASK_DIR=${MASK_DIR:-/home/ryreu/guided_cnn/Food101/LearningToLook/code/WeCLIPPlus/results_redmeat_openai_dinovit/val/prediction_cmap/}
+SIGLIP2_MASK_DIR=${SIGLIP2_MASK_DIR:-/home/ryreu/guided_cnn/Food101/LearningToLook/code/WeCLIPPlus/results_redmeat_siglip2_dinovit/val/prediction_cmap/}
+SKIP_SIGLIP2_GUIDED_SMOKE=${SKIP_SIGLIP2_GUIDED_SMOKE:-1}
 
 LOG_ROOT="$LOG_DIR"
 SMOKE_DIR="$LOG_ROOT/redmeat_smoke_debug_${SLURM_JOB_ID}"
@@ -100,6 +102,16 @@ run_check() {
   echo "[SMOKE] $name => $status (${dt}s)"
 }
 
+skip_check() {
+  local name="$1"
+  local reason="$2"
+  local log="$SMOKE_DIR/${name}.log"
+  printf "SKIPPED: %s\n" "$reason" > "$log"
+  echo "$name,SKIP,0,$log" >> "$SUMMARY_CSV"
+  echo "===== [SMOKE] $name ====="
+  echo "[SMOKE] $name => SKIP ($reason)"
+}
+
 # Shared tiny settings.
 BASE_LR=1e-4
 CLS_LR=1e-3
@@ -113,7 +125,7 @@ COMMON_OVR=(
   "DATA.BATCH_SIZE=$BATCH"
   "EXP.NUM_EPOCHS=1"
   "EXP.AUX_LOSSES_ON_VAL=False"
-  "LOGGING.SAVE_BEST=False"
+  "LOGGING.SAVE_BEST=True"
   "LOGGING.SAVE_LAST=False"
 )
 
@@ -204,8 +216,8 @@ run_check guided \
   --attention-epoch 0 \
   --kl-lambda 10 \
   --kl-increment 1 \
-  --base-lr "$BASE_LR" \
-  --classifier-lr "$CLS_LR" \
+  --base_lr "$BASE_LR" \
+  --classifier_lr "$CLS_LR" \
   --lr2-mult 1.0 \
   --checkpoint-dir "$SMOKE_DIR/guided_ckpts"
 
@@ -223,6 +235,28 @@ run_check guided_galsvit \
   --lr2-mult 1.0 \
   --checkpoint-dir "$SMOKE_DIR/guided_galsvit_ckpts"
 
+# Optional guided smoke against SigLIP2 WeCLIP masks.
+# Default is skip since that mask path may not be available yet.
+if [[ "$SKIP_SIGLIP2_GUIDED_SMOKE" -eq 1 ]]; then
+  skip_check guided_siglip2 "SKIP_SIGLIP2_GUIDED_SMOKE=1"
+elif [[ ! -d "$SIGLIP2_MASK_DIR" ]]; then
+  skip_check guided_siglip2 "missing SIGLIP2 mask dir: $SIGLIP2_MASK_DIR"
+else
+  run_check guided_siglip2 \
+    python -u RedMeat_Runs/run_guided_redmeat.py \
+    "$DATASET_ROOT" \
+    "$SIGLIP2_MASK_DIR" \
+    --seed 0 \
+    --num-epochs 1 \
+    --attention-epoch 0 \
+    --kl-lambda 10 \
+    --kl-increment 1 \
+    --base_lr "$BASE_LR" \
+    --classifier_lr "$CLS_LR" \
+    --lr2-mult 1.0 \
+    --checkpoint-dir "$SMOKE_DIR/guided_siglip2_ckpts"
+fi
+
 # Single-trial CLIP+LR check (kept tiny; no post-seed reruns).
 run_check clip_lr \
   env OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \
@@ -231,11 +265,11 @@ run_check clip_lr \
   --clip-model RN50 \
   --device cuda \
   --batch-size 128 \
-  --num-workers 4 \
+  --num-workers 0 \
   --n-trials 1 \
   --sampler random \
   --seed 0 \
-  --penalty-solvers l2:lbfgs \
+  --penalty-solvers l2:liblinear \
   --C-min 1e-4 \
   --C-max 1e-4 \
   --max-iter 200 \

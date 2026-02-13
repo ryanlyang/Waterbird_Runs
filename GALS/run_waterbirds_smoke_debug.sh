@@ -46,6 +46,7 @@ MASK100_DIR=/home/ryreu/guided_cnn/waterbirds/L100/LearningToLook/code/WeCLIPPlu
 ABN_WEIGHT=/home/ryreu/guided_cnn/waterbirds/Waterbird_Runs/GALS/weights/resnet50_abn_imagenet.pth.tar
 
 GUIDED_GALSVIT_SWEEP_PY="$RUNS_ROOT/run_guided_waterbird_gals_vitatt_sweep.py"
+SKIP_RN50_PATH_SMOKE=${SKIP_RN50_PATH_SMOKE:-1}
 
 LOG_ROOT=/home/ryreu/guided_cnn/logsWaterbird
 SMOKE_DIR="$LOG_ROOT/smoke_debug_${SLURM_JOB_ID}"
@@ -63,7 +64,6 @@ fi
 for need_dir in \
   "$WB95_PATH" "$WB100_PATH" \
   "$WB95_VIT_ATT" "$WB100_VIT_ATT" \
-  "$WB95_RN50_ATT" "$WB100_RN50_ATT" \
   "$MASK95_DIR" "$MASK100_DIR"
 do
   if [[ ! -d "$need_dir" ]]; then
@@ -100,6 +100,16 @@ run_check() {
   echo "[SMOKE] $name => $status (${dt}s)"
 }
 
+skip_check() {
+  local name="$1"
+  local reason="$2"
+  local log="$SMOKE_DIR/${name}.log"
+  printf "SKIPPED: %s\n" "$reason" > "$log"
+  echo "$name,SKIP,0,$log" >> "$SUMMARY_CSV"
+  echo "===== [SMOKE] $name ====="
+  echo "[SMOKE] $name => SKIP ($reason)"
+}
+
 # Shared tiny sweep settings.
 BASE_LR=1e-3
 CLS_LR=1e-4
@@ -110,31 +120,39 @@ CAM_W=1
 ABN_W=1
 
 # 1) GALS/ViT/RRR/GradCAM/ABN/UpWeight/OurMasks methods (both datasets) via run_gals_sweep.py.
-run_check gals95_rn50 \
-  python -u run_gals_sweep.py \
-  --method gals --config configs/waterbirds_95_gals.yaml \
-  --data-root "$DATA_ROOT" --waterbirds-dir "$WB95_DIR" \
-  --sampler random --n-trials 1 --seed 0 --train-seed 0 \
-  --base-lr-min "$BASE_LR" --base-lr-max "$BASE_LR" \
-  --cls-lr-min "$CLS_LR" --cls-lr-max "$CLS_LR" \
-  --weight-min "$GRAD_W" --weight-max "$GRAD_W" \
-  --tune-weight-decay --weight-decay-min "$WD_MIN" --weight-decay-max "$WD_MAX" \
-  --keep none --post-seeds 0 \
-  --logs-dir "$SMOKE_DIR/gals95_rn50_logs" --output-csv "$SMOKE_DIR/gals95_rn50.csv" \
-  EXP.NUM_EPOCHS=1
+if [[ "$SKIP_RN50_PATH_SMOKE" -eq 1 ]]; then
+  skip_check gals95_rn50 "SKIP_RN50_PATH_SMOKE=1"
+  skip_check gals100_rn50 "SKIP_RN50_PATH_SMOKE=1"
+elif [[ ! -d "$WB95_RN50_ATT" || ! -d "$WB100_RN50_ATT" ]]; then
+  skip_check gals95_rn50 "missing RN50 attention path(s)"
+  skip_check gals100_rn50 "missing RN50 attention path(s)"
+else
+  run_check gals95_rn50 \
+    python -u run_gals_sweep.py \
+    --method gals --config configs/waterbirds_95_gals.yaml \
+    --data-root "$DATA_ROOT" --waterbirds-dir "$WB95_DIR" \
+    --sampler random --n-trials 1 --seed 0 --train-seed 0 \
+    --base-lr-min "$BASE_LR" --base-lr-max "$BASE_LR" \
+    --cls-lr-min "$CLS_LR" --cls-lr-max "$CLS_LR" \
+    --weight-min "$GRAD_W" --weight-max "$GRAD_W" \
+    --tune-weight-decay --weight-decay-min "$WD_MIN" --weight-decay-max "$WD_MAX" \
+    --keep none --post-seeds 0 \
+    --logs-dir "$SMOKE_DIR/gals95_rn50_logs" --output-csv "$SMOKE_DIR/gals95_rn50.csv" \
+    EXP.NUM_EPOCHS=1
 
-run_check gals100_rn50 \
-  python -u run_gals_sweep.py \
-  --method gals --config configs/waterbirds_100_gals.yaml \
-  --data-root "$DATA_ROOT" --waterbirds-dir "$WB100_DIR" \
-  --sampler random --n-trials 1 --seed 0 --train-seed 0 \
-  --base-lr-min "$BASE_LR" --base-lr-max "$BASE_LR" \
-  --cls-lr-min "$CLS_LR" --cls-lr-max "$CLS_LR" \
-  --weight-min "$GRAD_W" --weight-max "$GRAD_W" \
-  --tune-weight-decay --weight-decay-min "$WD_MIN" --weight-decay-max "$WD_MAX" \
-  --keep none --post-seeds 0 \
-  --logs-dir "$SMOKE_DIR/gals100_rn50_logs" --output-csv "$SMOKE_DIR/gals100_rn50.csv" \
-  EXP.NUM_EPOCHS=1
+  run_check gals100_rn50 \
+    python -u run_gals_sweep.py \
+    --method gals --config configs/waterbirds_100_gals.yaml \
+    --data-root "$DATA_ROOT" --waterbirds-dir "$WB100_DIR" \
+    --sampler random --n-trials 1 --seed 0 --train-seed 0 \
+    --base-lr-min "$BASE_LR" --base-lr-max "$BASE_LR" \
+    --cls-lr-min "$CLS_LR" --cls-lr-max "$CLS_LR" \
+    --weight-min "$GRAD_W" --weight-max "$GRAD_W" \
+    --tune-weight-decay --weight-decay-min "$WD_MIN" --weight-decay-max "$WD_MAX" \
+    --keep none --post-seeds 0 \
+    --logs-dir "$SMOKE_DIR/gals100_rn50_logs" --output-csv "$SMOKE_DIR/gals100_rn50.csv" \
+    EXP.NUM_EPOCHS=1
+fi
 
 run_check rrr95_vit \
   python -u run_gals_sweep.py \
@@ -351,7 +369,7 @@ run_check clip_lr95 \
   --clip-model RN50 --device cuda \
   --batch-size 512 --num-workers 0 \
   --sampler random --n-trials 1 --seed 0 \
-  --penalty-solvers l2:lbfgs \
+  --penalty-solvers l2:liblinear \
   --C-min 1 --C-max 1 --max-iter 300 \
   --post-seeds 0 \
   --output-csv "$SMOKE_DIR/clip_lr95.csv"
@@ -363,7 +381,7 @@ run_check clip_lr100 \
   --clip-model RN50 --device cuda \
   --batch-size 512 --num-workers 0 \
   --sampler random --n-trials 1 --seed 0 \
-  --penalty-solvers l2:lbfgs \
+  --penalty-solvers l2:liblinear \
   --C-min 1 --C-max 1 --max-iter 300 \
   --post-seeds 0 \
   --output-csv "$SMOKE_DIR/clip_lr100.csv"
