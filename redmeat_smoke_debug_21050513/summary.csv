@@ -1,0 +1,13 @@
+name,status,seconds,log
+gals_vit,PASS,104,/home/ryreu/guided_cnn/logsRedMeat/redmeat_smoke_debug_21050513/gals_vit.log
+rrr_vit,PASS,111,/home/ryreu/guided_cnn/logsRedMeat/redmeat_smoke_debug_21050513/rrr_vit.log
+gradcam_vit,PASS,39,/home/ryreu/guided_cnn/logsRedMeat/redmeat_smoke_debug_21050513/gradcam_vit.log
+abn_vit,PASS,44,/home/ryreu/guided_cnn/logsRedMeat/redmeat_smoke_debug_21050513/abn_vit.log
+gals_ourmasks,PASS,118,/home/ryreu/guided_cnn/logsRedMeat/redmeat_smoke_debug_21050513/gals_ourmasks.log
+upweight,PASS,35,/home/ryreu/guided_cnn/logsRedMeat/redmeat_smoke_debug_21050513/upweight.log
+abn_baseline,PASS,50,/home/ryreu/guided_cnn/logsRedMeat/redmeat_smoke_debug_21050513/abn_baseline.log
+vanilla_cnn,PASS,18,/home/ryreu/guided_cnn/logsRedMeat/redmeat_smoke_debug_21050513/vanilla_cnn.log
+guided,PASS,20,/home/ryreu/guided_cnn/logsRedMeat/redmeat_smoke_debug_21050513/guided.log
+guided_galsvit,PASS,18,/home/ryreu/guided_cnn/logsRedMeat/redmeat_smoke_debug_21050513/guided_galsvit.log
+guided_siglip2,SKIP,0,/home/ryreu/guided_cnn/logsRedMeat/redmeat_smoke_debug_21050513/guided_siglip2.log
+clip_lr,FAIL,42,/home/ryreu/guided_cnn/logsRedMeat/redmeat_smoke_debug_21050513/clip_lr.log

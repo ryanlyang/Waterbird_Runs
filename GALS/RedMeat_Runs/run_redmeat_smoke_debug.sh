@@ -48,6 +48,7 @@ ABN_WEIGHT="$REPO_ROOT/weights/resnet50_abn_imagenet.pth.tar"
 MASK_DIR=${MASK_DIR:-/home/ryreu/guided_cnn/Food101/LearningToLook/code/WeCLIPPlus/results_redmeat_openai_dinovit/val/prediction_cmap/}
 SIGLIP2_MASK_DIR=${SIGLIP2_MASK_DIR:-/home/ryreu/guided_cnn/Food101/LearningToLook/code/WeCLIPPlus/results_redmeat_siglip2_dinovit/val/prediction_cmap/}
 SKIP_SIGLIP2_GUIDED_SMOKE=${SKIP_SIGLIP2_GUIDED_SMOKE:-1}
+SKIP_CLIP_LR_SMOKE=${SKIP_CLIP_LR_SMOKE:-0}
 
 LOG_ROOT="$LOG_DIR"
 SMOKE_DIR="$LOG_ROOT/redmeat_smoke_debug_${SLURM_JOB_ID}"
@@ -258,23 +259,27 @@ else
 fi
 
 # Single-trial CLIP+LR check (kept tiny; no post-seed reruns).
-run_check clip_lr \
-  env OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \
-  python -u RedMeat_Runs/run_clip_lr_sweep_redmeat.py \
-  "$DATASET_ROOT" \
-  --clip-model RN50 \
-  --device cuda \
-  --batch-size 128 \
-  --num-workers 0 \
-  --n-trials 1 \
-  --sampler random \
-  --seed 0 \
-  --penalty-solvers l2:liblinear \
-  --C-min 1e-4 \
-  --C-max 1e-4 \
-  --max-iter 200 \
-  --post-seeds 0 \
-  --output-csv "$SMOKE_DIR/clip_lr_smoke.csv"
+if [[ "$SKIP_CLIP_LR_SMOKE" -eq 1 ]]; then
+  skip_check clip_lr "SKIP_CLIP_LR_SMOKE=1"
+else
+  run_check clip_lr \
+    env OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \
+    python -u RedMeat_Runs/run_clip_lr_sweep_redmeat.py \
+    "$DATASET_ROOT" \
+    --clip-model RN50 \
+    --device cpu \
+    --batch-size 128 \
+    --num-workers 0 \
+    --n-trials 1 \
+    --sampler random \
+    --seed 0 \
+    --penalty-solvers l2:liblinear \
+    --C-min 1e-4 \
+    --C-max 1e-4 \
+    --max-iter 200 \
+    --post-seeds 0 \
+    --output-csv "$SMOKE_DIR/clip_lr_smoke.csv"
+fi
 
 echo
 echo "===== [SMOKE] SUMMARY ====="

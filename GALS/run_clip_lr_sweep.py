@@ -245,6 +245,7 @@ def _run_trial(
         solver=solver,
         fit_intercept=fit_intercept,
         max_iter=args.max_iter,
+        n_jobs=1,
         verbose=0,
     )
     if l1_ratio is not None and penalty == "elasticnet":
@@ -317,6 +318,7 @@ def _run_fixed_params(
         solver=solver,
         fit_intercept=fit_intercept,
         max_iter=args.max_iter,
+        n_jobs=1,
         verbose=0,
     )
     if l1_ratio is not None and penalty == "elasticnet":
@@ -457,10 +459,12 @@ def main():
     X_val = X_val.astype(np.float32, copy=False)
     X_test = X_test.astype(np.float32, copy=False)
 
+    print("[CLIP-LR] Feature extraction complete. Starting LR sweep...")
     # Free GPU memory for safety.
     if "cuda" in args.device:
+        # Avoid explicit empty_cache(): this has caused sporadic process-level
+        # crashes on some cluster nodes right after CLIP extraction.
         del model
-        torch.cuda.empty_cache()
 
     best_row = None
 
