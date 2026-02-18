@@ -372,8 +372,9 @@ def main():
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--output-csv", default="clip_lr_sweep.csv")
     p.add_argument("--sampler", choices=["tpe", "random"], default="tpe")
-    p.add_argument("--C-min", type=float, default=1e-6)
-    p.add_argument("--C-max", type=float, default=1e4)
+    # Narrower, centered range around the common LR baseline operating point (C ~ 1).
+    p.add_argument("--C-min", type=float, default=1e-2)
+    p.add_argument("--C-max", type=float, default=1e2)
     p.add_argument("--max-iter", type=int, default=5000)
     p.add_argument(
         "--penalty-solvers",

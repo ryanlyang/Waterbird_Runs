@@ -58,6 +58,7 @@ DATA_ROOT=/home/ryreu/guided_cnn/waterbirds/waterbird_1.0_forest2water2
 SWEEP_GT_ROOT=/home/ryreu/guided_cnn/waterbirds/L100/LearningToLook/code/WeCLIPPlus/results/val/prediction_cmap
 ALT1_GT_ROOT=/home/ryreu/guided_cnn/waterbirds/New_Teach/L100/LearningToLook/code/WeCLIPPlus/results/val/prediction_cmap
 ALT2_GT_ROOT=/home/ryreu/guided_cnn/waterbirds/newCLIP/L100/LearningToLook/code/WeCLIPPlus/results/val/prediction_cmap
+ALT3_GT_ROOT=/home/ryreu/guided_cnn/waterbirds/newCLIP/L100/LearningToLook/code/WeCLIPPlus/results_siglip2/val/prediction_cmap
 
 N_TRIALS=${N_TRIALS:-50}
 SWEEP_OUT=${SWEEP_OUT:-$LOG_DIR/guided_waterbird_sweep_${SLURM_JOB_ID}.csv}
@@ -83,6 +84,10 @@ if [[ ! -d "$ALT2_GT_ROOT" ]]; then
   echo "Missing ALT2_GT_ROOT: $ALT2_GT_ROOT" >&2
   exit 1
 fi
+if [[ ! -d "$ALT3_GT_ROOT" ]]; then
+  echo "Missing ALT3_GT_ROOT: $ALT3_GT_ROOT" >&2
+  exit 1
+fi
 
 echo "[$(date)] Host: $(hostname)"
 echo "Repo: $REPO_ROOT"
@@ -90,6 +95,7 @@ echo "Data: $DATA_ROOT"
 echo "Sweep masks: $SWEEP_GT_ROOT"
 echo "Alt1 masks: $ALT1_GT_ROOT"
 echo "Alt2 masks: $ALT2_GT_ROOT"
+echo "Alt3 masks: $ALT3_GT_ROOT"
 echo "Trials: $N_TRIALS"
 echo "Output CSV: $SWEEP_OUT"
 echo "Seed rerun CSV: $SEED_SWEEP_OUT"
@@ -212,5 +218,6 @@ PY
 run_seed_reruns "best5_ltl_l100" "$SWEEP_GT_ROOT"
 run_seed_reruns "best5_new_teach_l100" "$ALT1_GT_ROOT"
 run_seed_reruns "best5_newclip_l100" "$ALT2_GT_ROOT"
+run_seed_reruns "best5_siglip2_l100" "$ALT3_GT_ROOT"
 
 echo "[DONE] Sweep + seed reruns complete."

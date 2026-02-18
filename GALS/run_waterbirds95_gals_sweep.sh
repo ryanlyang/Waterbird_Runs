@@ -62,7 +62,11 @@ TRAIN_SEED=${TRAIN_SEED:-0}
 SAMPLER=${SAMPLER:-tpe}
 KEEP=${KEEP:-best}
 MAX_HOURS=${MAX_HOURS:-}
-TUNE_WEIGHT_DECAY=${TUNE_WEIGHT_DECAY:-1}
+TUNE_WEIGHT_DECAY=${TUNE_WEIGHT_DECAY:-0}
+BASE_LR_MIN=${BASE_LR_MIN:-1e-5}
+BASE_LR_MAX=${BASE_LR_MAX:-5e-2}
+CLS_LR_MIN=${CLS_LR_MIN:-1e-5}
+CLS_LR_MAX=${CLS_LR_MAX:-5e-2}
 POST_SEEDS=${POST_SEEDS:-5}
 POST_SEED_START=${POST_SEED_START:-0}
 POST_KEEP=${POST_KEEP:-all}
@@ -105,6 +109,10 @@ ARGS=(--config configs/waterbirds_95_gals.yaml
   --keep "$KEEP"
   --output-csv "$OUT_CSV"
   --logs-dir "$TRIAL_LOGS"
+  --base-lr-min "$BASE_LR_MIN"
+  --base-lr-max "$BASE_LR_MAX"
+  --cls-lr-min "$CLS_LR_MIN"
+  --cls-lr-max "$CLS_LR_MAX"
   --post-seeds "$POST_SEEDS"
   --post-seed-start "$POST_SEED_START"
   --post-keep "$POST_KEEP"

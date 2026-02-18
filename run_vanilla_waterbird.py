@@ -278,16 +278,39 @@ def run_single(args):
 
     model = make_model(args.model, num_classes, pretrained=args.pretrained).to(device)
 
+    base_lr = getattr(args, "base_lr", None)
+    classifier_lr = getattr(args, "classifier_lr", None)
+    if base_lr is None and classifier_lr is None:
+        base_lr = args.lr
+        classifier_lr = args.lr
+    elif base_lr is None:
+        base_lr = args.lr
+    elif classifier_lr is None:
+        classifier_lr = args.lr
+
+    base_params = []
+    fc_params = []
+    for name, param in model.named_parameters():
+        if "fc" in name:
+            fc_params.append(param)
+        else:
+            base_params.append(param)
+
+    param_groups = [
+        {"params": base_params, "lr": float(base_lr)},
+        {"params": fc_params, "lr": float(classifier_lr)},
+    ]
+
     optimizer = optim.SGD(
-        model.parameters(),
-        lr=args.lr,
+        param_groups,
         momentum=args.momentum,
         weight_decay=args.weight_decay,
         nesterov=args.nesterov,
     )
 
     print(
-        f"\n=== RUN: model={args.model} epochs={args.num_epochs} lr={args.lr} "
+        f"\n=== RUN: model={args.model} epochs={args.num_epochs} "
+        f"base_lr={base_lr} classifier_lr={classifier_lr} "
         f"momentum={args.momentum} wd={args.weight_decay} nesterov={args.nesterov} seed={args.seed} ===",
         flush=True,
     )
@@ -342,6 +365,8 @@ def parse_args():
     p.add_argument("--batch-size", type=int, default=96)
     p.add_argument("--num-epochs", type=int, default=200)
     p.add_argument("--lr", type=float, default=0.01)
+    p.add_argument("--base-lr", type=float, default=None)
+    p.add_argument("--classifier-lr", type=float, default=None)
     p.add_argument("--momentum", type=float, default=0.9)
     p.add_argument("--weight-decay", type=float, default=1e-5)
     p.add_argument("--nesterov", action="store_true", default=False)

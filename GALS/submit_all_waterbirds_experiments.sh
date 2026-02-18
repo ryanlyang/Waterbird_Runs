@@ -7,7 +7,10 @@ set -Eeuo pipefail
 # - Sweeps (optionally with dependencies if you provide generator job ids):
 #   - GALS/rrr (RN50) sweeps (95/100) can depend on the corresponding RN50 attention job
 #   - GALS/rrr (ViT), GALS/GradCAM (ViT), GALS/ABN (ViT) sweeps can depend on the ViT attention job
-#   - Guided strategy sweeps using GALS ViT attentions can depend on the ViT attention job
+#   - Guided strategy sweeps:
+#     - GT-mask guided (95/100)
+#     - GALS ViT attention guided (95/100; can depend on ViT attention job)
+#     - GALS RN50 attention guided (95/100; can depend on RN50 attention jobs)
 # - Independent sweeps:
 #   - GALS "ourmasks" sweeps (95/100) [depends on MASK_DIRs existing, but no job dependency]
 #   - UpWeight sweeps (95/100)
@@ -164,13 +167,29 @@ else
 fi
 
 if [[ "${SKIP_GUIDED:-0}" -ne 1 ]]; then
-  echo "[SUBMIT] Guided strategy sweeps using GALS ViT attentions as GT..."
+  echo "[SUBMIT] Guided strategy sweeps..."
+  j_guided95_gt="$(submit_parsable ../run_guided_waterbird_sweep.sh)"
+  j_guided100_gt="$(submit_parsable ../run_guided_100_sweep.sh)"
+  echo "  guided95:          $j_guided95_gt"
+  echo "  guided100:         $j_guided100_gt"
+
+  echo "  guided (GALS ViT attentions as GT):"
   depvit=()
   if [[ -n "$VIT_JOB_ID" ]]; then depvit=("$(dep_afterok "$VIT_JOB_ID")"); fi
   j_guided95_vit="$(sbatch --parsable --time="$SBATCH_TIME" --export="$EXPORT_SWEEP" ${depvit[@]:-} ../run_guided_waterbird_gals_vitatt_sweep.sh)"
   j_guided100_vit="$(sbatch --parsable --time="$SBATCH_TIME" --export="$EXPORT_SWEEP" ${depvit[@]:-} ../run_guided_100_galsvit_sweep.sh)"
-  echo "  guided95_galsvit:  $j_guided95_vit"
-  echo "  guided100_galsvit: $j_guided100_vit"
+  echo "    guided95_galsvit:  $j_guided95_vit"
+  echo "    guided100_galsvit: $j_guided100_vit"
+
+  echo "  guided (GALS RN50 attentions as GT):"
+  dep95=()
+  dep100=()
+  if [[ -n "$RN50_95_JOB_ID" ]]; then dep95=("$(dep_afterok "$RN50_95_JOB_ID")"); fi
+  if [[ -n "$RN50_100_JOB_ID" ]]; then dep100=("$(dep_afterok "$RN50_100_JOB_ID")"); fi
+  j_guided95_rn50="$(sbatch --parsable --time="$SBATCH_TIME" --export="$EXPORT_SWEEP" ${dep95[@]:-} ../run_guided_waterbird_gals_rn50att_sweep.sh)"
+  j_guided100_rn50="$(sbatch --parsable --time="$SBATCH_TIME" --export="$EXPORT_SWEEP" ${dep100[@]:-} ../run_guided_100_galsrn50_sweep.sh)"
+  echo "    guided95_galsrn50:  $j_guided95_rn50"
+  echo "    guided100_galsrn50: $j_guided100_rn50"
 else
   echo "[SUBMIT] SKIP_GUIDED=1"
 fi

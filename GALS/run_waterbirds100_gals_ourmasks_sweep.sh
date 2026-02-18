@@ -62,6 +62,11 @@ MASK_DIR="${MASK_DIR%\"}"
 MASK_DIR="${MASK_DIR#\"}"
 MASK_DIR="${MASK_DIR%\'}"
 MASK_DIR="${MASK_DIR#\'}"
+ALT_MASK1_DIR=${ALT_MASK1_DIR:-/home/ryreu/guided_cnn/waterbirds/New_Teach/L100/LearningToLook/code/WeCLIPPlus/results/val/prediction_cmap}
+ALT_MASK2_DIR=${ALT_MASK2_DIR:-/home/ryreu/guided_cnn/waterbirds/newCLIP/L100/LearningToLook/code/WeCLIPPlus/results/val/prediction_cmap}
+ALT_MASK3_DIR=${ALT_MASK3_DIR:-/home/ryreu/guided_cnn/waterbirds/newCLIP/L100/LearningToLook/code/WeCLIPPlus/results_siglip2/val/prediction_cmap}
+POST_MASK_DIRS=${POST_MASK_DIRS:-$ALT_MASK1_DIR,$ALT_MASK2_DIR,$ALT_MASK3_DIR}
+POST_MASK_LABELS=${POST_MASK_LABELS:-new_teach,newclip,siglip2}
 
 N_TRIALS=${N_TRIALS:-100}
 SWEEP_SEED=${SWEEP_SEED:-0}
@@ -69,7 +74,11 @@ TRAIN_SEED=${TRAIN_SEED:-0}
 SAMPLER=${SAMPLER:-tpe}
 KEEP=${KEEP:-best}
 MAX_HOURS=${MAX_HOURS:-}
-TUNE_WEIGHT_DECAY=${TUNE_WEIGHT_DECAY:-1}
+TUNE_WEIGHT_DECAY=${TUNE_WEIGHT_DECAY:-0}
+BASE_LR_MIN=${BASE_LR_MIN:-1e-5}
+BASE_LR_MAX=${BASE_LR_MAX:-5e-2}
+CLS_LR_MIN=${CLS_LR_MIN:-1e-5}
+CLS_LR_MAX=${CLS_LR_MAX:-5e-2}
 POST_SEEDS=${POST_SEEDS:-5}
 POST_SEED_START=${POST_SEED_START:-0}
 POST_KEEP=${POST_KEEP:-all}
@@ -85,12 +94,26 @@ echo "[$(date)] Host: $(hostname)"
 echo "Repo: $REPO_ROOT"
 echo "Data: $DATA_ROOT/$DATA_DIR"
 echo "MASK_DIR: $MASK_DIR"
+echo "POST_MASK_DIRS: $POST_MASK_DIRS"
+echo "POST_MASK_LABELS: $POST_MASK_LABELS"
 echo "Trials: $N_TRIALS (sampler=$SAMPLER sweep_seed=$SWEEP_SEED train_seed=$TRAIN_SEED keep=$KEEP)"
 which python
 
 if [[ ! -d "$MASK_DIR" ]]; then
   echo "[ERROR] MASK_DIR does not exist: $MASK_DIR" >&2
   exit 2
+fi
+if [[ -n "${POST_MASK_DIRS:-}" ]]; then
+  IFS=',' read -r -a _post_mask_arr <<< "$POST_MASK_DIRS"
+  for _d in "${_post_mask_arr[@]}"; do
+    if [[ -z "$_d" ]]; then
+      continue
+    fi
+    if [[ ! -d "$_d" ]]; then
+      echo "[ERROR] POST_MASK_DIR does not exist: $_d" >&2
+      exit 2
+    fi
+  done
 fi
 
 python -c "import optuna" 2>/dev/null || {
@@ -111,9 +134,15 @@ ARGS=(--config configs/waterbirds_100_gals_ourmasks.yaml
   --keep "$KEEP"
   --output-csv "$OUT_CSV"
   --logs-dir "$TRIAL_LOGS"
+  --base-lr-min "$BASE_LR_MIN"
+  --base-lr-max "$BASE_LR_MAX"
+  --cls-lr-min "$CLS_LR_MIN"
+  --cls-lr-max "$CLS_LR_MAX"
   --post-seeds "$POST_SEEDS"
   --post-seed-start "$POST_SEED_START"
   --post-keep "$POST_KEEP"
+  --post-segmentation-dirs "$POST_MASK_DIRS"
+  --post-segmentation-labels "$POST_MASK_LABELS"
 )
 
 if [[ "$TUNE_WEIGHT_DECAY" -eq 1 ]]; then

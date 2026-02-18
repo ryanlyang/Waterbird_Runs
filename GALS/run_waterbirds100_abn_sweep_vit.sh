@@ -46,6 +46,12 @@ POST_KEEP=${POST_KEEP:-all}
 
 ABN_ATT_WEIGHT_MIN=${ABN_ATT_WEIGHT_MIN:-0.1}
 ABN_ATT_WEIGHT_MAX=${ABN_ATT_WEIGHT_MAX:-10.0}
+BASE_LR_MIN=${BASE_LR_MIN:-1e-3}
+BASE_LR_MAX=${BASE_LR_MAX:-1e-1}
+CLS_LR_MIN=${CLS_LR_MIN:-1e-4}
+CLS_LR_MAX=${CLS_LR_MAX:-1e-2}
+WD_MIN=${WD_MIN:-1e-6}
+WD_MAX=${WD_MAX:-1e-4}
 
 cd "$REPO_ROOT"
 export PYTHONPATH="$PWD:${PYTHONPATH:-}"
@@ -76,6 +82,12 @@ ARGS=(--method abn_att
   --keep "$KEEP"
   --output-csv "$OUT_CSV"
   --logs-dir "$TRIAL_LOGS"
+  --base-lr-min "$BASE_LR_MIN"
+  --base-lr-max "$BASE_LR_MAX"
+  --cls-lr-min "$CLS_LR_MIN"
+  --cls-lr-max "$CLS_LR_MAX"
+  --weight-decay-min "$WD_MIN"
+  --weight-decay-max "$WD_MAX"
   --abn-att-weight-min "$ABN_ATT_WEIGHT_MIN"
   --abn-att-weight-max "$ABN_ATT_WEIGHT_MAX"
   --post-seeds "$POST_SEEDS"

@@ -67,12 +67,13 @@ SAMPLER=${SAMPLER:-tpe}
 POST_SEEDS=${POST_SEEDS:-5}
 POST_SEED_START=${POST_SEED_START:-0}
 
-LR_MIN=${LR_MIN:-1e-6}
-LR_MAX=${LR_MAX:-1e-2}
-WD_MIN=${WD_MIN:-1e-7}
-WD_MAX=${WD_MAX:-1e-3}
-MOM_MIN=${MOM_MIN:-0.80}
-MOM_MAX=${MOM_MAX:-0.98}
+BASE_LR_MIN=${BASE_LR_MIN:-1e-5}
+BASE_LR_MAX=${BASE_LR_MAX:-5e-2}
+CLS_LR_MIN=${CLS_LR_MIN:-1e-5}
+CLS_LR_MAX=${CLS_LR_MAX:-5e-2}
+WEIGHT_DECAY=${WEIGHT_DECAY:-1e-5}
+MOMENTUM=${MOMENTUM:-0.9}
+NESTEROV=${NESTEROV:-0}
 
 OUT_CSV=${OUT_CSV:-$LOG_DIR/vanilla100_sweep_${SLURM_JOB_ID}.csv}
 POST_OUT_CSV=${POST_OUT_CSV:-$LOG_DIR/vanilla100_best5_${SLURM_JOB_ID}.csv}
@@ -100,17 +101,25 @@ echo "Post CSV: $POST_OUT_CSV"
 echo "SAVE_CHECKPOINTS=$SAVE_CHECKPOINTS"
 which python
 
-srun --unbuffered python -u run_vanilla_waterbird_sweep.py \
-  "$DATA_PATH" \
-  --n-trials "$N_TRIALS" \
-  --seed "$SWEEP_SEED" \
-  --train-seed "$TRAIN_SEED" \
-  --sampler "$SAMPLER" \
-  --lr-min "$LR_MIN" --lr-max "$LR_MAX" \
-  --wd-min "$WD_MIN" --wd-max "$WD_MAX" \
-  --momentum-min "$MOM_MIN" --momentum-max "$MOM_MAX" \
-  --output-csv "$OUT_CSV" \
-  --post-seeds "$POST_SEEDS" \
-  --post-seed-start "$POST_SEED_START" \
-  --post-output-csv "$POST_OUT_CSV" \
+ARGS=(
+  "$DATA_PATH"
+  --n-trials "$N_TRIALS"
+  --seed "$SWEEP_SEED"
+  --train-seed "$TRAIN_SEED"
+  --sampler "$SAMPLER"
+  --base-lr-min "$BASE_LR_MIN" --base-lr-max "$BASE_LR_MAX"
+  --cls-lr-min "$CLS_LR_MIN" --cls-lr-max "$CLS_LR_MAX"
+  --weight-decay "$WEIGHT_DECAY"
+  --momentum "$MOMENTUM"
+  --output-csv "$OUT_CSV"
+  --post-seeds "$POST_SEEDS"
+  --post-seed-start "$POST_SEED_START"
+  --post-output-csv "$POST_OUT_CSV"
   --checkpoint-dir "$CKPT_DIR"
+)
+
+if [[ "$NESTEROV" -eq 1 ]]; then
+  ARGS+=(--nesterov)
+fi
+
+srun --unbuffered python -u run_vanilla_waterbird_sweep.py "${ARGS[@]}"
