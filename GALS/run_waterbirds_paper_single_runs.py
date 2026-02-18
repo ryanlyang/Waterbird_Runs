@@ -59,6 +59,27 @@ def _write_row(csv_path: str, row: Dict, header: List[str]) -> None:
         writer.writerow(row)
 
 
+def _tail_text(path: str, n: int = 80) -> str:
+    try:
+        with open(path, "r") as f:
+            lines = f.readlines()
+        return "".join(lines[-n:]).rstrip()
+    except Exception:
+        return ""
+
+
+def _required_attention_dir(config_path: str) -> Optional[str]:
+    if OmegaConf is None:
+        return None
+    cfg = OmegaConf.load(config_path)
+    if not hasattr(cfg, "DATA") or not hasattr(cfg.DATA, "ATTENTION_DIR"):
+        return None
+    att_dir = str(cfg.DATA.ATTENTION_DIR)
+    if att_dir.upper() == "NONE":
+        return None
+    return att_dir
+
+
 def _extract_hparams_from_config(config_path: str, method: str) -> Dict[str, object]:
     if OmegaConf is None:
         return {"config": config_path, "note": "omegaconf_not_available"}
@@ -96,6 +117,7 @@ def _run_main_single(
     config_path: str,
     run_name: str,
     logs_dir: str,
+    aux_losses_on_val: bool,
 ) -> Dict[str, object]:
     cmd = [
         python_exe,
@@ -109,6 +131,7 @@ def _run_main_single(
         f"DATA.ROOT={data_root}",
         f"DATA.WATERBIRDS_DIR={dataset_dir}",
         "EXP.NUM_TRIALS=1",
+        f"EXP.AUX_LOSSES_ON_VAL={'True' if aux_losses_on_val else 'False'}",
     ]
 
     env = os.environ.copy()
@@ -150,6 +173,12 @@ def _run_main_single(
                     test_metrics[key] = val
         rc = proc.wait()
         if rc != 0:
+            tail = _tail_text(log_path, n=120)
+            if tail:
+                raise RuntimeError(
+                    f"Run failed (exit {rc}): {run_name}. See {log_path}\n"
+                    f"--- tail of failing log ---\n{tail}"
+                )
             raise RuntimeError(f"Run failed (exit {rc}): {run_name}. See {log_path}")
 
     group_accs: Dict[str, float] = {}
@@ -272,6 +301,17 @@ def main() -> None:
     parser.add_argument("--clip-fit-intercept", action="store_true", default=True)
     parser.add_argument("--clip-no-fit-intercept", action="store_false", dest="clip_fit_intercept")
     parser.add_argument("--clip-max-iter", type=int, default=5000)
+    parser.add_argument(
+        "--aux-losses-on-val",
+        action="store_true",
+        default=False,
+        help="Compute aux guidance losses on validation (default: off, matches sweep jobs).",
+    )
+    parser.add_argument(
+        "--no-aux-losses-on-val",
+        action="store_false",
+        dest="aux_losses_on_val",
+    )
     args = parser.parse_args()
 
     os.makedirs(args.logs_dir, exist_ok=True)
@@ -304,7 +344,15 @@ def main() -> None:
             config_path = spec.config_95 if dataset_tag == "wb95" else spec.config_100
             run_name = f"{args.run_prefix}_{spec.method}_{dataset_tag}_{ts}"
             print(f"[RUN] {dataset_tag} {spec.method} ({config_path})", flush=True)
+            required_att = _required_attention_dir(config_path)
+            if required_att is not None:
+                att_path = os.path.join(args.data_root, dataset_dir, required_att)
+                if not os.path.isdir(att_path):
+                    raise FileNotFoundError(
+                        f"Missing required attention directory for {spec.method} ({dataset_tag}): {att_path}"
+                    )
             hp = _extract_hparams_from_config(config_path, spec.method)
+            hp["aux_losses_on_val_override"] = bool(args.aux_losses_on_val)
             result = _run_main_single(
                 python_exe=python_exe,
                 data_root=args.data_root,
@@ -312,6 +360,7 @@ def main() -> None:
                 config_path=config_path,
                 run_name=run_name,
                 logs_dir=args.logs_dir,
+                aux_losses_on_val=bool(args.aux_losses_on_val),
             )
             row = {
                 "dataset": dataset_tag,

@@ -95,6 +95,7 @@ CLIP_PENALTY=${CLIP_PENALTY:-l2}
 CLIP_SOLVER=${CLIP_SOLVER:-lbfgs}
 CLIP_MAX_ITER=${CLIP_MAX_ITER:-5000}
 CLIP_FIT_INTERCEPT=${CLIP_FIT_INTERCEPT:-1}
+AUX_LOSSES_ON_VAL=${AUX_LOSSES_ON_VAL:-0}
 
 JOB_TAG=${SLURM_JOB_ID:-manual}
 RUN_PREFIX=${RUN_PREFIX:-paper_ref_debug}
@@ -125,6 +126,7 @@ echo "WB100: $WB100_PATH"
 echo "Logs dir: $RUN_LOG_DIR"
 echo "Output CSV: $OUT_CSV"
 echo "CLIP model/device: $CLIP_MODEL / $CLIP_DEVICE"
+echo "AUX_LOSSES_ON_VAL: $AUX_LOSSES_ON_VAL"
 which python
 
 ARGS=(
@@ -149,6 +151,12 @@ if [[ "$CLIP_FIT_INTERCEPT" -eq 1 ]]; then
   ARGS+=(--clip-fit-intercept)
 else
   ARGS+=(--clip-no-fit-intercept)
+fi
+
+if [[ "$AUX_LOSSES_ON_VAL" -eq 1 ]]; then
+  ARGS+=(--aux-losses-on-val)
+else
+  ARGS+=(--no-aux-losses-on-val)
 fi
 
 srun --unbuffered python -u run_waterbirds_paper_single_runs.py "${ARGS[@]}"
