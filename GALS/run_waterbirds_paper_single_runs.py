@@ -29,7 +29,14 @@ class TrainSpec:
     config_100: str
 
 
-TRAIN_SPECS = [
+TRAIN_SPECS_RN50 = [
+    TrainSpec("gals", "configs/waterbirds_95_gals.yaml", "configs/waterbirds_100_gals.yaml"),
+    TrainSpec("abn", "configs/waterbirds_95_abn.yaml", "configs/waterbirds_100_abn.yaml"),
+    TrainSpec("upweight", "configs/waterbirds_95_upweight.yaml", "configs/waterbirds_100_upweight.yaml"),
+    TrainSpec("vanilla", "configs/waterbirds_95_vanilla.yaml", "configs/waterbirds_100_vanilla.yaml"),
+]
+
+TRAIN_SPECS_VIT = [
     TrainSpec("gals_vit", "configs/waterbirds_95_gals_vit.yaml", "configs/waterbirds_100_gals_vit.yaml"),
     TrainSpec("abn", "configs/waterbirds_95_abn.yaml", "configs/waterbirds_100_abn.yaml"),
     TrainSpec("upweight", "configs/waterbirds_95_upweight.yaml", "configs/waterbirds_100_upweight.yaml"),
@@ -95,7 +102,7 @@ def _extract_hparams_from_config(config_path: str, method: str) -> Dict[str, obj
         "batch_size": int(cfg.DATA.BATCH_SIZE),
     }
     losses = cfg.EXP.LOSSES
-    if method == "gals_vit":
+    if method in ("gals", "gals_vit"):
         hp["grad_outside_weight"] = float(losses.GRADIENT_OUTSIDE.WEIGHT)
         hp["grad_outside_criterion"] = str(losses.GRADIENT_OUTSIDE.CRITERION)
         hp["grad_outside_gt"] = str(losses.GRADIENT_OUTSIDE.GT)
@@ -281,7 +288,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Single-run Waterbirds reference check using paper-config hyperparameters for "
-            "GALS_ViT, ABN, UpWeight, Vanilla, plus fixed CLIP+LR."
+            "GALS (RN50 by default), ABN, UpWeight, Vanilla, plus fixed CLIP+LR."
         )
     )
     parser.add_argument("--data-root", default="/home/ryreu/guided_cnn/waterbirds")
@@ -312,6 +319,12 @@ def main() -> None:
         action="store_false",
         dest="aux_losses_on_val",
     )
+    parser.add_argument(
+        "--gals-mode",
+        choices=("rn50", "vit", "both"),
+        default="rn50",
+        help="Which GALS variant(s) to run. Default 'rn50' matches paper GALS config.",
+    )
     args = parser.parse_args()
 
     os.makedirs(args.logs_dir, exist_ok=True)
@@ -338,9 +351,17 @@ def main() -> None:
     ts = time.strftime("%Y%m%d_%H%M%S")
     python_exe = sys.executable
     rows: List[Dict[str, object]] = []
+    if args.gals_mode == "rn50":
+        train_specs = TRAIN_SPECS_RN50
+    elif args.gals_mode == "vit":
+        train_specs = TRAIN_SPECS_VIT
+    else:
+        train_specs = TRAIN_SPECS_RN50 + [
+            TrainSpec("gals_vit", "configs/waterbirds_95_gals_vit.yaml", "configs/waterbirds_100_gals_vit.yaml")
+        ]
 
     for dataset_tag, dataset_dir in datasets:
-        for spec in TRAIN_SPECS:
+        for spec in train_specs:
             config_path = spec.config_95 if dataset_tag == "wb95" else spec.config_100
             run_name = f"{args.run_prefix}_{spec.method}_{dataset_tag}_{ts}"
             print(f"[RUN] {dataset_tag} {spec.method} ({config_path})", flush=True)

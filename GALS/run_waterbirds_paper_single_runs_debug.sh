@@ -96,6 +96,7 @@ CLIP_SOLVER=${CLIP_SOLVER:-lbfgs}
 CLIP_MAX_ITER=${CLIP_MAX_ITER:-5000}
 CLIP_FIT_INTERCEPT=${CLIP_FIT_INTERCEPT:-1}
 AUX_LOSSES_ON_VAL=${AUX_LOSSES_ON_VAL:-0}
+GALS_MODE=${GALS_MODE:-rn50}
 
 JOB_TAG=${SLURM_JOB_ID:-manual}
 RUN_PREFIX=${RUN_PREFIX:-paper_ref_debug}
@@ -127,6 +128,7 @@ echo "Logs dir: $RUN_LOG_DIR"
 echo "Output CSV: $OUT_CSV"
 echo "CLIP model/device: $CLIP_MODEL / $CLIP_DEVICE"
 echo "AUX_LOSSES_ON_VAL: $AUX_LOSSES_ON_VAL"
+echo "GALS_MODE: $GALS_MODE"
 which python
 
 ARGS=(
@@ -145,6 +147,7 @@ ARGS=(
   --clip-penalty "$CLIP_PENALTY"
   --clip-solver "$CLIP_SOLVER"
   --clip-max-iter "$CLIP_MAX_ITER"
+  --gals-mode "$GALS_MODE"
 )
 
 if [[ "$CLIP_FIT_INTERCEPT" -eq 1 ]]; then
