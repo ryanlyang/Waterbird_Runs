@@ -7,7 +7,6 @@ set -Eeuo pipefail
 # - Attention-map dependent sweeps:
 #   - GALS (RN50 attentions)
 #   - GALS (gradient_outside / RRR-style)
-#   - RRR (same loss family, table-label variant)
 #   - GradCAM
 #   - ABN supervision (ABN_SUPERVISION)
 #   - Guided strategy sweep using ViT .pth maps as direct guidance
@@ -134,11 +133,9 @@ if [[ -n "$VIT_JOB_ID" ]]; then depvit=("$(dep_afterok "$VIT_JOB_ID")"); fi
 if [[ "${SKIP_VIT_METHODS:-0}" -ne 1 ]]; then
   echo "[SUBMIT] GALS/ViT method sweeps..."
   j_gals_vit="$(sbatch --parsable --time="$SBATCH_TIME" --export="$EXPORT_SWEEP" ${depvit[@]:-} run_redmeat_gals_vit_sweep_optuna.sh)"
-  j_rrr_vit="$(sbatch --parsable --time="$SBATCH_TIME" --export="$EXPORT_SWEEP" ${depvit[@]:-} run_redmeat_rrr_vit_sweep_optuna.sh)"
   j_gc_vit="$(sbatch --parsable --time="$SBATCH_TIME" --export="$EXPORT_SWEEP" ${depvit[@]:-} run_redmeat_gradcam_vit_sweep_optuna.sh)"
   j_abn_vit="$(sbatch --parsable --time="$SBATCH_TIME" --export="$EXPORT_SWEEP" ${depvit[@]:-} run_redmeat_abn_vit_sweep_optuna.sh)"
   echo "  gals_vit:    $j_gals_vit"
-  echo "  rrr_vit:     $j_rrr_vit"
   echo "  gradcam_vit: $j_gc_vit"
   echo "  abn_vit:     $j_abn_vit"
 else

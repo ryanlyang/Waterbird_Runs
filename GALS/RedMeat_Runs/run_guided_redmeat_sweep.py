@@ -66,14 +66,14 @@ def run_trial(trial_id, args, rng, sampler_name):
     if sampler_name == "random":
         attn_epoch = int(rng.integers(args.attn_min, args.attn_max + 1))
         kl_lambda = loguniform(rng, args.kl_min, args.kl_max)
-        kl_incr = 0.1 * kl_lambda
+        kl_incr = 0.0
         base_lr = loguniform(rng, args.base_lr_min, args.base_lr_max)
         classifier_lr = loguniform(rng, args.cls_lr_min, args.cls_lr_max)
         lr2_mult = loguniform(rng, args.lr2_mult_min, args.lr2_mult_max)
     else:
         attn_epoch = int(args.trial.suggest_int("attention_epoch", args.attn_min, args.attn_max))
         kl_lambda = float(args.trial.suggest_float("kl_lambda", args.kl_min, args.kl_max, log=True))
-        kl_incr = 0.1 * kl_lambda
+        kl_incr = 0.0
         base_lr = float(args.trial.suggest_float("base_lr", args.base_lr_min, args.base_lr_max, log=True))
         classifier_lr = float(args.trial.suggest_float("classifier_lr", args.cls_lr_min, args.cls_lr_max, log=True))
         lr2_mult = float(args.trial.suggest_float("lr2_mult", args.lr2_mult_min, args.lr2_mult_max, log=True))
@@ -132,10 +132,10 @@ def main():
     p.add_argument("--attn-max", type=int, default=rgm.num_epochs - 1)
     p.add_argument("--kl-min", type=float, default=1.0)
     p.add_argument("--kl-max", type=float, default=500.0)
-    p.add_argument("--base-lr-min", type=float, default=1e-6)
-    p.add_argument("--base-lr-max", type=float, default=1e-3)
+    p.add_argument("--base-lr-min", type=float, default=1e-5)
+    p.add_argument("--base-lr-max", type=float, default=5e-2)
     p.add_argument("--cls-lr-min", type=float, default=1e-5)
-    p.add_argument("--cls-lr-max", type=float, default=1e-2)
+    p.add_argument("--cls-lr-max", type=float, default=5e-2)
     p.add_argument("--lr2-mult-min", type=float, default=1e-1)
     p.add_argument("--lr2-mult-max", type=float, default=3.0)
     p.add_argument("--sampler", choices=["tpe", "random"], default="tpe")

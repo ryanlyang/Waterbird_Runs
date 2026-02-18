@@ -31,7 +31,7 @@ EXP:
       MODE: "suppress_outside"
       COMBINE_ATT_MODE: "average_nonzero"
 
-  NUM_EPOCHS: 150
+  NUM_EPOCHS: 50
   OPTIMIZER: "SGD"
   WEIGHT_DECAY: 1e-5
   MOMENTUM: 0.9

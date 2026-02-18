@@ -1,5 +1,6 @@
 import argparse
 import csv
+import errno
 import os
 import re
 import shutil
@@ -13,12 +14,83 @@ import numpy as np
 FLOAT_RE = re.compile(r"([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)")
 
 
+def _safe_write_and_flush(log_file, text, *, retries=3, sleep_s=0.05):
+    """
+    Best-effort write helper for transient non-blocking filesystem errors.
+    Returns True on success and False when retries are exhausted.
+    """
+    for attempt in range(retries):
+        try:
+            log_file.write(text)
+            log_file.flush()
+            return True
+        except BlockingIOError:
+            if attempt == retries - 1:
+                return False
+            time.sleep(sleep_s)
+        except OSError as exc:
+            if exc.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
+                if attempt == retries - 1:
+                    return False
+                time.sleep(sleep_s)
+                continue
+            raise
+    return False
+
+
+def _range_around(center, lo_factor=0.1, hi_factor=10.0, fallback=None):
+    """
+    Build a log-scale range around `center` as [center*lo_factor, center*hi_factor].
+    If center is missing/invalid, use fallback=(min, max).
+    """
+    if center is None:
+        return fallback
+    try:
+        c = float(center)
+    except Exception:
+        return fallback
+    if c <= 0:
+        return fallback
+    lo = c * float(lo_factor)
+    hi = c * float(hi_factor)
+    if lo <= 0 or hi <= 0 or lo >= hi:
+        return fallback
+    return lo, hi
+
+
 def loguniform(rng, low, high):
     return float(np.exp(rng.uniform(np.log(low), np.log(high))))
 
 
 def sanitize_name(text):
     return re.sub(r"[^A-Za-z0-9._-]+", "_", str(text)).strip("._-")
+
+
+def parse_csv_list(text):
+    if text is None:
+        return []
+    s = str(text).strip()
+    if not s:
+        return []
+    return [item.strip() for item in s.split(",") if item.strip()]
+
+
+def upsert_override(overrides, key, value):
+    key_eq = f"{key}="
+    new_override = f"{key}={value}"
+    out = []
+    replaced = False
+    for ov in (overrides or []):
+        if ov.startswith(key_eq):
+            if not replaced:
+                out.append(new_override)
+                replaced = True
+            continue
+        out.append(ov)
+    if not replaced:
+        out.append(new_override)
+    return out
+
 
 def _maybe_import_omegaconf():
     try:
@@ -107,6 +179,7 @@ def run_one_trial(
     base_lr,
     classifier_lr,
     grad_weight=None,
+    grad_criterion=None,
     cam_weight=None,
     abn_cls_weight=None,
     abn_att_weight=None,
@@ -140,7 +213,10 @@ def run_one_trial(
     if method in ("gals", "rrr"):
         if grad_weight is None:
             raise ValueError("grad_weight must be provided when method is gals/rrr")
+        if grad_criterion is None:
+            grad_criterion = "L1"
         cmd.append(f"EXP.LOSSES.GRADIENT_OUTSIDE.WEIGHT={grad_weight}")
+        cmd.append(f"EXP.LOSSES.GRADIENT_OUTSIDE.CRITERION={grad_criterion}")
     elif method == "gradcam":
         if cam_weight is None:
             raise ValueError("cam_weight must be provided when method='gradcam'")
@@ -171,8 +247,7 @@ def run_one_trial(
     run_dir = os.path.join("trained_weights", dataset_name, run_name)
     start = time.time()
     with open(trial_log, "w") as lf:
-        lf.write(f"[CMD] {' '.join(cmd)}\n")
-        lf.flush()
+        _safe_write_and_flush(lf, f"[CMD] {' '.join(cmd)}\n")
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -182,9 +257,14 @@ def run_one_trial(
             universal_newlines=True,
         )
         assert proc.stdout is not None
+        write_warned = False
         for line in proc.stdout:
-            lf.write(line)
-            lf.flush()
+            if not _safe_write_and_flush(lf, line) and not write_warned:
+                print(
+                    f"[WARN] Trial {trial_id}: log write temporarily unavailable; continuing run.",
+                    flush=True,
+                )
+                write_warned = True
 
             if "BALANCED VAL ACC:" in line:
                 m = FLOAT_RE.search(line)
@@ -233,6 +313,7 @@ def run_one_trial(
         "base_lr": base_lr,
         "classifier_lr": classifier_lr,
         "grad_weight": grad_weight,
+        "grad_criterion": grad_criterion,
         "cam_weight": cam_weight,
         "abn_cls_weight": abn_cls_weight,
         "abn_att_weight": abn_att_weight,
@@ -285,25 +366,30 @@ def main():
         help="Optional wallclock limit; stops launching new trials once exceeded",
     )
 
-    parser.add_argument("--weight-min", type=float, default=1.0, help="Min for GRADIENT_OUTSIDE weight (gals/rrr)")
-    parser.add_argument("--weight-max", type=float, default=100000.0, help="Max for GRADIENT_OUTSIDE weight (gals/rrr)")
-    parser.add_argument("--cam-weight-min", type=float, default=0.1, help="Min for GRADCAM weight (gradcam)")
-    parser.add_argument("--cam-weight-max", type=float, default=100.0, help="Max for GRADCAM weight (gradcam)")
-    parser.add_argument("--abn-cls-weight-min", type=float, default=0.1, help="Min for ABN_CLASSIFICATION weight (abn_cls)")
-    parser.add_argument("--abn-cls-weight-max", type=float, default=10.0, help="Max for ABN_CLASSIFICATION weight (abn_cls)")
-    parser.add_argument("--abn-att-weight-min", type=float, default=0.1, help="Min for ABN_SUPERVISION weight (abn_att)")
-    parser.add_argument("--abn-att-weight-max", type=float, default=10.0, help="Max for ABN_SUPERVISION weight (abn_att)")
-    parser.add_argument("--base-lr-min", type=float, default=1e-6)
-    parser.add_argument("--base-lr-max", type=float, default=1e-3)
-    parser.add_argument("--cls-lr-min", type=float, default=1e-5)
-    parser.add_argument("--cls-lr-max", type=float, default=1e-2)
+    parser.add_argument("--weight-min", type=float, default=None, help="Min for GRADIENT_OUTSIDE weight (gals/rrr)")
+    parser.add_argument("--weight-max", type=float, default=None, help="Max for GRADIENT_OUTSIDE weight (gals/rrr)")
+    parser.add_argument(
+        "--grad-criteria",
+        default="L1,L2",
+        help="Comma-separated criteria to consider for GRADIENT_OUTSIDE when method is gals/rrr.",
+    )
+    parser.add_argument("--cam-weight-min", type=float, default=None, help="Min for GRADCAM weight (gradcam)")
+    parser.add_argument("--cam-weight-max", type=float, default=None, help="Max for GRADCAM weight (gradcam)")
+    parser.add_argument("--abn-cls-weight-min", type=float, default=None, help="Min for ABN_CLASSIFICATION weight (abn_cls)")
+    parser.add_argument("--abn-cls-weight-max", type=float, default=None, help="Max for ABN_CLASSIFICATION weight (abn_cls)")
+    parser.add_argument("--abn-att-weight-min", type=float, default=None, help="Min for ABN_SUPERVISION weight (abn_att)")
+    parser.add_argument("--abn-att-weight-max", type=float, default=None, help="Max for ABN_SUPERVISION weight (abn_att)")
+    parser.add_argument("--base-lr-min", type=float, default=None)
+    parser.add_argument("--base-lr-max", type=float, default=None)
+    parser.add_argument("--cls-lr-min", type=float, default=None)
+    parser.add_argument("--cls-lr-max", type=float, default=None)
     parser.add_argument(
         "--tune-weight-decay",
         action="store_true",
         help="If set, also tune EXP.WEIGHT_DECAY (otherwise uses the value from the YAML config).",
     )
-    parser.add_argument("--weight-decay-min", type=float, default=1e-6)
-    parser.add_argument("--weight-decay-max", type=float, default=1e-3)
+    parser.add_argument("--weight-decay-min", type=float, default=None)
+    parser.add_argument("--weight-decay-max", type=float, default=None)
     parser.add_argument(
         "--post-seeds",
         type=int,
@@ -333,6 +419,19 @@ def main():
         help="What to keep for the post-sweep seed reruns under trained_weights/: all or none.",
     )
     parser.add_argument(
+        "--post-segmentation-dirs",
+        default="",
+        help=(
+            "Comma-separated extra segmentation directories for additional post-sweep reruns. "
+            "Each phase overrides DATA.SEGMENTATION_DIR to the given path."
+        ),
+    )
+    parser.add_argument(
+        "--post-segmentation-labels",
+        default="",
+        help="Comma-separated labels for --post-segmentation-dirs (must match count if provided).",
+    )
+    parser.add_argument(
         "--run-name-prefix",
         default=None,
         help=(
@@ -355,6 +454,7 @@ def main():
         "base_lr",
         "classifier_lr",
         "grad_weight",
+        "grad_criterion",
         "cam_weight",
         "abn_cls_weight",
         "abn_att_weight",
@@ -384,18 +484,126 @@ def main():
         run_name_prefix = sanitize_name(f"{args.method}_{dataset_tag}_{job_tag}")
     print(f"[SWEEP] run_name_prefix={run_name_prefix}", flush=True)
 
+    cfg_base_lr = None
+    cfg_cls_lr = None
     cfg_weight_decay = None
+    cfg_grad_weight = None
+    cfg_cam_weight = None
+    cfg_abn_cls_weight = None
+    cfg_abn_att_weight = None
     cfg_num_epochs = 150
     OmegaConf = _maybe_import_omegaconf()
     if OmegaConf is not None:
         try:
             _cfg = OmegaConf.load(args.config)
+            cfg_base_lr = float(_cfg.EXP.BASE.LR)
+            cfg_cls_lr = float(_cfg.EXP.CLASSIFIER.LR)
             cfg_weight_decay = float(_cfg.EXP.WEIGHT_DECAY)
             cfg_num_epochs = int(_cfg.EXP.NUM_EPOCHS)
+            losses = _cfg.EXP.LOSSES if "LOSSES" in _cfg.EXP else None
+            if losses is not None:
+                if "GRADIENT_OUTSIDE" in losses and "WEIGHT" in losses.GRADIENT_OUTSIDE:
+                    cfg_grad_weight = float(losses.GRADIENT_OUTSIDE.WEIGHT)
+                if "GRADCAM" in losses and "WEIGHT" in losses.GRADCAM:
+                    cfg_cam_weight = float(losses.GRADCAM.WEIGHT)
+                if "ABN_CLASSIFICATION" in losses and "WEIGHT" in losses.ABN_CLASSIFICATION:
+                    cfg_abn_cls_weight = float(losses.ABN_CLASSIFICATION.WEIGHT)
+                if "ABN_SUPERVISION" in losses and "WEIGHT" in losses.ABN_SUPERVISION:
+                    cfg_abn_att_weight = float(losses.ABN_SUPERVISION.WEIGHT)
         except Exception:
+            cfg_base_lr = None
+            cfg_cls_lr = None
             cfg_weight_decay = None
+            cfg_grad_weight = None
+            cfg_cam_weight = None
+            cfg_abn_cls_weight = None
+            cfg_abn_att_weight = None
     if cfg_weight_decay is None:
         cfg_weight_decay = 1e-5
+
+    # Sweep around config/paper defaults unless explicit ranges are provided.
+    if args.base_lr_min is None or args.base_lr_max is None:
+        lo, hi = _range_around(cfg_base_lr, fallback=(5e-4, 5e-2))
+        if args.base_lr_min is None:
+            args.base_lr_min = lo
+        if args.base_lr_max is None:
+            args.base_lr_max = hi
+    if args.cls_lr_min is None or args.cls_lr_max is None:
+        lo, hi = _range_around(cfg_cls_lr, fallback=(1e-5, 1e-2))
+        if args.cls_lr_min is None:
+            args.cls_lr_min = lo
+        if args.cls_lr_max is None:
+            args.cls_lr_max = hi
+    if args.weight_decay_min is None or args.weight_decay_max is None:
+        lo, hi = _range_around(cfg_weight_decay, fallback=(1e-6, 1e-4))
+        if args.weight_decay_min is None:
+            args.weight_decay_min = lo
+        if args.weight_decay_max is None:
+            args.weight_decay_max = hi
+
+    if args.method in ("gals", "rrr"):
+        if args.weight_min is None or args.weight_max is None:
+            lo, hi = _range_around(cfg_grad_weight, fallback=(1e3, 1e5))
+            if args.weight_min is None:
+                args.weight_min = lo
+            if args.weight_max is None:
+                args.weight_max = hi
+    elif args.method == "gradcam":
+        if args.cam_weight_min is None or args.cam_weight_max is None:
+            lo, hi = _range_around(cfg_cam_weight, fallback=(0.1, 10.0))
+            if args.cam_weight_min is None:
+                args.cam_weight_min = lo
+            if args.cam_weight_max is None:
+                args.cam_weight_max = hi
+    elif args.method == "abn_cls":
+        if args.abn_cls_weight_min is None or args.abn_cls_weight_max is None:
+            lo, hi = _range_around(cfg_abn_cls_weight, fallback=(0.1, 10.0))
+            if args.abn_cls_weight_min is None:
+                args.abn_cls_weight_min = lo
+            if args.abn_cls_weight_max is None:
+                args.abn_cls_weight_max = hi
+    elif args.method == "abn_att":
+        if args.abn_att_weight_min is None or args.abn_att_weight_max is None:
+            lo, hi = _range_around(cfg_abn_att_weight, fallback=(0.1, 10.0))
+            if args.abn_att_weight_min is None:
+                args.abn_att_weight_min = lo
+            if args.abn_att_weight_max is None:
+                args.abn_att_weight_max = hi
+
+    grad_criteria = []
+    if args.method in ("gals", "rrr"):
+        grad_criteria = [c.strip().upper() for c in str(args.grad_criteria).split(",") if c.strip()]
+        # Keep order stable while deduplicating.
+        grad_criteria = list(dict.fromkeys(grad_criteria))
+        valid_criteria = {"L1", "L2"}
+        invalid = [c for c in grad_criteria if c not in valid_criteria]
+        if invalid:
+            raise ValueError(f"Invalid --grad-criteria values: {invalid}. Valid: L1,L2")
+        if not grad_criteria:
+            grad_criteria = ["L1", "L2"]
+
+    print(
+        f"[SWEEP] Hyperparameter ranges: "
+        f"base_lr=[{args.base_lr_min}, {args.base_lr_max}] "
+        f"classifier_lr=[{args.cls_lr_min}, {args.cls_lr_max}] "
+        f"weight_decay=[{args.weight_decay_min}, {args.weight_decay_max}]",
+        flush=True,
+    )
+    if args.method in ("gals", "rrr"):
+        print(f"[SWEEP] grad_weight=[{args.weight_min}, {args.weight_max}]", flush=True)
+        print(f"[SWEEP] grad_criterion={grad_criteria}", flush=True)
+    elif args.method == "gradcam":
+        print(f"[SWEEP] cam_weight=[{args.cam_weight_min}, {args.cam_weight_max}]", flush=True)
+    elif args.method == "abn_cls":
+        print(
+            f"[SWEEP] abn_cls_weight=[{args.abn_cls_weight_min}, {args.abn_cls_weight_max}]",
+            flush=True,
+        )
+    elif args.method == "abn_att":
+        print(
+            f"[SWEEP] abn_att_weight=[{args.abn_att_weight_min}, {args.abn_att_weight_max}]",
+            flush=True,
+        )
 
     if inferred_attention_dir and inferred_attention_dir.upper() != "NONE":
         expected_attention_dir = os.path.join(args.data_root, args.dataset_dir, inferred_attention_dir)
@@ -405,6 +613,21 @@ def main():
                 f"Expected directory: {expected_attention_dir}\n"
                 "Run `extract_attention.py` first (stage 1) using the corresponding *_attention.yaml config."
             )
+
+    post_seg_dirs = parse_csv_list(args.post_segmentation_dirs)
+    post_seg_labels = parse_csv_list(args.post_segmentation_labels)
+    if post_seg_labels and len(post_seg_labels) != len(post_seg_dirs):
+        raise ValueError(
+            "--post-segmentation-labels must have the same number of entries as --post-segmentation-dirs"
+        )
+    for seg_dir in post_seg_dirs:
+        if not os.path.isdir(seg_dir):
+            raise FileNotFoundError(f"Missing post segmentation directory: {seg_dir}")
+    if post_seg_dirs:
+        print(
+            f"[POST] extra segmentation phases: {len(post_seg_dirs)} -> {post_seg_dirs}",
+            flush=True,
+        )
 
     if args.sampler == "tpe":
         try:
@@ -428,6 +651,7 @@ def main():
         base_lr,
         classifier_lr,
         grad_weight,
+        grad_criterion,
         cam_weight,
         abn_cls_weight,
         abn_att_weight,
@@ -448,6 +672,7 @@ def main():
             base_lr=base_lr,
             classifier_lr=classifier_lr,
             grad_weight=grad_weight,
+            grad_criterion=grad_criterion,
             cam_weight=cam_weight,
             abn_cls_weight=abn_cls_weight,
             abn_att_weight=abn_att_weight,
@@ -492,11 +717,13 @@ def main():
                 else cfg_weight_decay
             )
             grad_weight = None
+            grad_criterion = None
             cam_weight = None
             abn_cls_weight = None
             abn_att_weight = None
             if args.method in ("gals", "rrr"):
                 grad_weight = loguniform(rng, args.weight_min, args.weight_max)
+                grad_criterion = str(rng.choice(grad_criteria))
             elif args.method == "gradcam":
                 cam_weight = loguniform(rng, args.cam_weight_min, args.cam_weight_max)
             elif args.method == "abn_cls":
@@ -509,6 +736,7 @@ def main():
                     base_lr,
                     classifier_lr,
                     grad_weight,
+                    grad_criterion,
                     cam_weight,
                     abn_cls_weight,
                     abn_att_weight,
@@ -533,11 +761,13 @@ def main():
                 else cfg_weight_decay
             )
             grad_weight = None
+            grad_criterion = None
             cam_weight = None
             abn_cls_weight = None
             abn_att_weight = None
             if args.method in ("gals", "rrr"):
                 grad_weight = float(trial.suggest_float("grad_weight", args.weight_min, args.weight_max, log=True))
+                grad_criterion = str(trial.suggest_categorical("grad_criterion", grad_criteria))
             elif args.method == "gradcam":
                 cam_weight = float(trial.suggest_float("cam_weight", args.cam_weight_min, args.cam_weight_max, log=True))
             elif args.method == "abn_cls":
@@ -554,6 +784,7 @@ def main():
                 base_lr,
                 classifier_lr,
                 grad_weight,
+                grad_criterion,
                 cam_weight,
                 abn_cls_weight,
                 abn_att_weight,
@@ -572,7 +803,12 @@ def main():
             callbacks.append(_time_limit_cb)
 
         study = optuna.create_study(direction="maximize")
-        study.optimize(objective, n_trials=args.n_trials, catch=(RuntimeError,), callbacks=callbacks)
+        study.optimize(
+            objective,
+            n_trials=args.n_trials,
+            catch=(RuntimeError, BlockingIOError, OSError),
+            callbacks=callbacks,
+        )
 
     if best_row is not None:
         print("[SWEEP] Best trial:", flush=True)
@@ -589,12 +825,15 @@ def main():
         post_logs_dir = args.post_logs_dir or f"{args.logs_dir}_best_seeds"
 
         post_header = [
+            "phase",
             "seed",
             "name",
             "method",
+            "segmentation_dir",
             "base_lr",
             "classifier_lr",
             "grad_weight",
+            "grad_criterion",
             "cam_weight",
             "abn_cls_weight",
             "abn_att_weight",
@@ -612,63 +851,86 @@ def main():
         ]
 
         seeds = list(range(args.post_seed_start, args.post_seed_start + args.post_seeds))
-        print(f"[POST] Rerunning best hyperparameters for {len(seeds)} seeds: {seeds}", flush=True)
-
-        for s in seeds:
-            run_name = f"{run_name_prefix}_best_seed{s}"
-            row = run_one_trial(
-                100000 + s,
-                run_name=run_name,
-                method=args.method,
-                config=args.config,
-                data_root=args.data_root,
-                dataset_dir=args.dataset_dir,
-                dataset_name=dataset_name,
-                train_seed=s,
-                base_lr=float(best_row["base_lr"]),
-                classifier_lr=float(best_row["classifier_lr"]),
-                grad_weight=float(best_row["grad_weight"]) if best_row.get("grad_weight") is not None else None,
-                cam_weight=float(best_row["cam_weight"]) if best_row.get("cam_weight") is not None else None,
-                abn_cls_weight=float(best_row["abn_cls_weight"]) if best_row.get("abn_cls_weight") is not None else None,
-                abn_att_weight=float(best_row["abn_att_weight"]) if best_row.get("abn_att_weight") is not None else None,
-                weight_decay=float(best_row["weight_decay"]),
-                python_exe=python_exe,
-                logs_dir=post_logs_dir,
-                extra_overrides=args.overrides,
+        post_phases = [("default", list(args.overrides or []), None)]
+        for i, seg_dir in enumerate(post_seg_dirs):
+            phase_label = (
+                sanitize_name(post_seg_labels[i])
+                if i < len(post_seg_labels)
+                else f"segdir{i + 1}"
             )
+            if not phase_label:
+                phase_label = f"segdir{i + 1}"
+            phase_overrides = upsert_override(args.overrides, "DATA.SEGMENTATION_DIR", seg_dir)
+            post_phases.append((phase_label, phase_overrides, seg_dir))
 
-            if args.post_keep == "none":
-                cleanup_run_dir(row.get("run_dir"))
+        print(
+            f"[POST] Rerunning best hyperparameters for {len(seeds)} seeds across {len(post_phases)} phase(s).",
+            flush=True,
+        )
 
-            out_row = {
-                "seed": s,
-                "name": row.get("name"),
-                "method": row.get("method"),
-                "base_lr": row.get("base_lr"),
-                "classifier_lr": row.get("classifier_lr"),
-                "grad_weight": row.get("grad_weight"),
-                "cam_weight": row.get("cam_weight"),
-                "abn_cls_weight": row.get("abn_cls_weight"),
-                "abn_att_weight": row.get("abn_att_weight"),
-                "weight_decay": row.get("weight_decay"),
-                "best_balanced_val_acc": row.get("best_balanced_val_acc"),
-                "test_acc": row.get("test_acc"),
-                "balanced_test_acc": row.get("balanced_test_acc"),
-                "per_group": row.get("per_group"),
-                "worst_group": row.get("worst_group"),
-                "checkpoint": row.get("checkpoint"),
-                "log_path": row.get("log_path"),
-                "seconds": row.get("seconds"),
-                "run_dir": row.get("run_dir"),
-                "sweep_best_trial": int(best_row["trial"]),
-            }
-            write_row(post_csv, out_row, post_header)
-            post_rows.append(out_row)
-            print(
-                f"[POST] seed={s} best_balanced_val_acc={out_row['best_balanced_val_acc']} "
-                f"per_group={out_row['per_group']} worst_group={out_row['worst_group']}",
-                flush=True,
-            )
+        for phase_name, phase_overrides, phase_seg_dir in post_phases:
+            for s in seeds:
+                if phase_name == "default":
+                    run_name = f"{run_name_prefix}_best_seed{s}"
+                else:
+                    run_name = f"{run_name_prefix}_{phase_name}_best_seed{s}"
+                row = run_one_trial(
+                    100000 + s,
+                    run_name=run_name,
+                    method=args.method,
+                    config=args.config,
+                    data_root=args.data_root,
+                    dataset_dir=args.dataset_dir,
+                    dataset_name=dataset_name,
+                    train_seed=s,
+                    base_lr=float(best_row["base_lr"]),
+                    classifier_lr=float(best_row["classifier_lr"]),
+                    grad_weight=float(best_row["grad_weight"]) if best_row.get("grad_weight") is not None else None,
+                    grad_criterion=str(best_row["grad_criterion"]) if best_row.get("grad_criterion") is not None else None,
+                    cam_weight=float(best_row["cam_weight"]) if best_row.get("cam_weight") is not None else None,
+                    abn_cls_weight=float(best_row["abn_cls_weight"]) if best_row.get("abn_cls_weight") is not None else None,
+                    abn_att_weight=float(best_row["abn_att_weight"]) if best_row.get("abn_att_weight") is not None else None,
+                    weight_decay=float(best_row["weight_decay"]),
+                    python_exe=python_exe,
+                    logs_dir=post_logs_dir,
+                    extra_overrides=phase_overrides,
+                )
+
+                if args.post_keep == "none":
+                    cleanup_run_dir(row.get("run_dir"))
+
+                out_row = {
+                    "phase": phase_name,
+                    "seed": s,
+                    "name": row.get("name"),
+                    "method": row.get("method"),
+                    "segmentation_dir": phase_seg_dir,
+                    "base_lr": row.get("base_lr"),
+                    "classifier_lr": row.get("classifier_lr"),
+                    "grad_weight": row.get("grad_weight"),
+                    "grad_criterion": row.get("grad_criterion"),
+                    "cam_weight": row.get("cam_weight"),
+                    "abn_cls_weight": row.get("abn_cls_weight"),
+                    "abn_att_weight": row.get("abn_att_weight"),
+                    "weight_decay": row.get("weight_decay"),
+                    "best_balanced_val_acc": row.get("best_balanced_val_acc"),
+                    "test_acc": row.get("test_acc"),
+                    "balanced_test_acc": row.get("balanced_test_acc"),
+                    "per_group": row.get("per_group"),
+                    "worst_group": row.get("worst_group"),
+                    "checkpoint": row.get("checkpoint"),
+                    "log_path": row.get("log_path"),
+                    "seconds": row.get("seconds"),
+                    "run_dir": row.get("run_dir"),
+                    "sweep_best_trial": int(best_row["trial"]),
+                }
+                write_row(post_csv, out_row, post_header)
+                post_rows.append(out_row)
+                print(
+                    f"[POST] phase={phase_name} seed={s} best_balanced_val_acc={out_row['best_balanced_val_acc']} "
+                    f"per_group={out_row['per_group']} worst_group={out_row['worst_group']}",
+                    flush=True,
+                )
 
         def _mean_std(key):
             vals = [r.get(key) for r in post_rows]

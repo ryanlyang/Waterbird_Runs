@@ -46,10 +46,10 @@ CLIP_MODEL=${CLIP_MODEL:-RN50}
 BATCH_SIZE=${BATCH_SIZE:-256}
 NUM_WORKERS=${NUM_WORKERS:-4}
 OBJECTIVE=${OBJECTIVE:-val_avg_group_acc}
-C_MIN=${C_MIN:-1e-6}
-C_MAX=${C_MAX:-1e4}
+C_MIN=${C_MIN:-1e-2}
+C_MAX=${C_MAX:-1e2}
 MAX_ITER=${MAX_ITER:-5000}
-PENALTY_SOLVERS=${PENALTY_SOLVERS:-l2:lbfgs,l2:saga,l1:saga,elasticnet:saga}
+PENALTY_SOLVERS=${PENALTY_SOLVERS:-l2:lbfgs,l2:liblinear,l2:saga,l1:liblinear,l1:saga,elasticnet:saga}
 POST_SEEDS=${POST_SEEDS:-5}
 POST_SEED_START=${POST_SEED_START:-0}
 

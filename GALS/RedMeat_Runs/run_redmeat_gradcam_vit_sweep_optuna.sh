@@ -46,7 +46,13 @@ TRAIN_SEED=${TRAIN_SEED:-0}
 SAMPLER=${SAMPLER:-tpe}
 KEEP=${KEEP:-best}
 MAX_HOURS=${MAX_HOURS:-}
-TUNE_WEIGHT_DECAY=${TUNE_WEIGHT_DECAY:-1}
+TUNE_WEIGHT_DECAY=${TUNE_WEIGHT_DECAY:-0}
+BASE_LR_MIN=${BASE_LR_MIN:-5e-4}
+BASE_LR_MAX=${BASE_LR_MAX:-5e-2}
+CLS_LR_MIN=${CLS_LR_MIN:-1e-5}
+CLS_LR_MAX=${CLS_LR_MAX:-1e-3}
+CAM_WEIGHT_MIN=${CAM_WEIGHT_MIN:-1e-2}
+CAM_WEIGHT_MAX=${CAM_WEIGHT_MAX:-1e2}
 POST_SEEDS=${POST_SEEDS:-5}
 POST_SEED_START=${POST_SEED_START:-0}
 POST_KEEP=${POST_KEEP:-all}
@@ -75,6 +81,12 @@ ARGS=(--method gradcam
   --keep "$KEEP"
   --output-csv "$OUT_CSV"
   --logs-dir "$TRIAL_LOGS"
+  --base-lr-min "$BASE_LR_MIN"
+  --base-lr-max "$BASE_LR_MAX"
+  --cls-lr-min "$CLS_LR_MIN"
+  --cls-lr-max "$CLS_LR_MAX"
+  --cam-weight-min "$CAM_WEIGHT_MIN"
+  --cam-weight-max "$CAM_WEIGHT_MAX"
   --post-seeds "$POST_SEEDS"
   --post-seed-start "$POST_SEED_START"
   --post-keep "$POST_KEEP"

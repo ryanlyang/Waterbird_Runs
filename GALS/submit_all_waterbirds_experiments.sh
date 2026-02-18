@@ -5,8 +5,8 @@ set -Eeuo pipefail
 #
 # What it submits:
 # - Sweeps (optionally with dependencies if you provide generator job ids):
-#   - GALS/rrr (RN50) sweeps (95/100) can depend on the corresponding RN50 attention job
-#   - GALS/rrr (ViT), GALS/GradCAM (ViT), GALS/ABN (ViT) sweeps can depend on the ViT attention job
+#   - GALS (RN50) sweeps (95/100) can depend on the corresponding RN50 attention job
+#   - GALS (ViT), GALS/GradCAM (ViT), GALS/ABN (ViT) sweeps can depend on the ViT attention job
 #   - Guided strategy sweeps:
 #     - GT-mask guided (95/100)
 #     - GALS ViT attention guided (95/100; can depend on ViT attention job)
@@ -141,27 +141,21 @@ else
 fi
 
 if [[ "${SKIP_VIT_METHODS:-0}" -ne 1 ]]; then
-  echo "[SUBMIT] GALS ViT-method sweeps (RRR/GradCAM/ABN)..."
+  echo "[SUBMIT] GALS ViT-method sweeps (GALS/GradCAM/ABN)..."
   depvit=()
   if [[ -n "$VIT_JOB_ID" ]]; then depvit=("$(dep_afterok "$VIT_JOB_ID")"); fi
-  j_rrr95_vit="$(sbatch --parsable --time="$SBATCH_TIME" --export="$EXPORT_SWEEP" ${depvit[@]:-} run_waterbirds95_rrr_sweep_vit.sh)"
-  j_rrr100_vit="$(sbatch --parsable --time="$SBATCH_TIME" --export="$EXPORT_SWEEP" ${depvit[@]:-} run_waterbirds100_rrr_sweep_vit.sh)"
+  j_gals95_vit="$(sbatch --parsable --time="$SBATCH_TIME" --export="$EXPORT_SWEEP" ${depvit[@]:-} run_waterbirds95_gals_sweep_vit.sh)"
+  j_gals100_vit="$(sbatch --parsable --time="$SBATCH_TIME" --export="$EXPORT_SWEEP" ${depvit[@]:-} run_waterbirds100_gals_sweep_vit.sh)"
   j_gc95_vit="$(sbatch --parsable --time="$SBATCH_TIME" --export="$EXPORT_SWEEP" ${depvit[@]:-} run_waterbirds95_gradcam_sweep_vit.sh)"
   j_gc100_vit="$(sbatch --parsable --time="$SBATCH_TIME" --export="$EXPORT_SWEEP" ${depvit[@]:-} run_waterbirds100_gradcam_sweep_vit.sh)"
   j_abn95_vit="$(sbatch --parsable --time="$SBATCH_TIME" --export="$EXPORT_SWEEP" ${depvit[@]:-} run_waterbirds95_abn_sweep_vit.sh)"
   j_abn100_vit="$(sbatch --parsable --time="$SBATCH_TIME" --export="$EXPORT_SWEEP" ${depvit[@]:-} run_waterbirds100_abn_sweep_vit.sh)"
-  echo "  rrr95_vit:     $j_rrr95_vit"
-  echo "  rrr100_vit:    $j_rrr100_vit"
+  echo "  gals95_vit:    $j_gals95_vit"
+  echo "  gals100_vit:   $j_gals100_vit"
   echo "  gradcam95_vit: $j_gc95_vit"
   echo "  gradcam100_vit:$j_gc100_vit"
   echo "  abn95_vit:     $j_abn95_vit"
   echo "  abn100_vit:    $j_abn100_vit"
-
-  echo "[SUBMIT] GALS (RRR) sweeps using ViT attentions (same method as gals_sweep_vit)..."
-  j_gals95_vit="$(sbatch --parsable --time="$SBATCH_TIME" --export="$EXPORT_SWEEP" ${depvit[@]:-} run_waterbirds95_gals_sweep_vit.sh)"
-  j_gals100_vit="$(sbatch --parsable --time="$SBATCH_TIME" --export="$EXPORT_SWEEP" ${depvit[@]:-} run_waterbirds100_gals_sweep_vit.sh)"
-  echo "  gals95_vit:    $j_gals95_vit"
-  echo "  gals100_vit:   $j_gals100_vit"
 else
   echo "[SUBMIT] SKIP_VIT_METHODS=1"
 fi

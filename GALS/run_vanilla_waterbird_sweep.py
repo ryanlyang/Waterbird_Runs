@@ -78,9 +78,11 @@ def _run_trial(trial_id: int, args, rng: np.random.Generator, sampler_name: str)
     if sampler_name == "random":
         base_lr = _loguniform(rng, args.base_lr_min, args.base_lr_max)
         classifier_lr = _loguniform(rng, args.cls_lr_min, args.cls_lr_max)
+        momentum = float(rng.uniform(args.momentum_min, args.momentum_max))
     else:
         base_lr = float(args.trial.suggest_float("base_lr", args.base_lr_min, args.base_lr_max, log=True))
         classifier_lr = float(args.trial.suggest_float("classifier_lr", args.cls_lr_min, args.cls_lr_max, log=True))
+        momentum = float(args.trial.suggest_float("momentum", args.momentum_min, args.momentum_max))
 
     run_args = _build_run_args(
         args=args,
@@ -88,7 +90,7 @@ def _run_trial(trial_id: int, args, rng: np.random.Generator, sampler_name: str)
         base_lr=base_lr,
         classifier_lr=classifier_lr,
         weight_decay=args.weight_decay,
-        momentum=args.momentum,
+        momentum=momentum,
         nesterov=args.nesterov,
     )
 
@@ -99,7 +101,7 @@ def _run_trial(trial_id: int, args, rng: np.random.Generator, sampler_name: str)
         "base_lr": base_lr,
         "classifier_lr": classifier_lr,
         "weight_decay": args.weight_decay,
-        "momentum": args.momentum,
+        "momentum": momentum,
         "nesterov": args.nesterov,
         "best_balanced_val_acc": best_balanced_val,
         "test_acc": test_acc,
@@ -134,7 +136,14 @@ def main():
     p.add_argument("--cls-lr-min", type=float, default=1e-5)
     p.add_argument("--cls-lr-max", type=float, default=5e-2)
     p.add_argument("--weight-decay", type=float, default=1e-5)
-    p.add_argument("--momentum", type=float, default=0.9)
+    p.add_argument("--momentum-min", type=float, default=0.85)
+    p.add_argument("--momentum-max", type=float, default=0.95)
+    p.add_argument(
+        "--momentum",
+        type=float,
+        default=None,
+        help="Optional fixed momentum override (if set, momentum-min/max are ignored).",
+    )
     p.add_argument("--nesterov", action="store_true", default=False)
     p.add_argument("--no-nesterov", action="store_false", dest="nesterov")
 
@@ -145,6 +154,12 @@ def main():
     p.add_argument("--post-output-csv", default="vanilla_waterbird_best5.csv")
 
     args = p.parse_args()
+
+    if args.momentum is not None:
+        args.momentum_min = float(args.momentum)
+        args.momentum_max = float(args.momentum)
+    if args.momentum_min > args.momentum_max:
+        raise ValueError("--momentum-min must be <= --momentum-max")
 
     header = [
         "trial",

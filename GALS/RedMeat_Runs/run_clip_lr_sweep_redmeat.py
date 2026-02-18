@@ -20,9 +20,7 @@ _PENALTY_SOLVER_BASE_CHOICES = [
     ("l1", "saga", None),
     ("elasticnet", "saga", "suggest"),
 ]
-# RedMeat multi-class CLIP+LR has shown sporadic native crashes with liblinear on some nodes.
-# Keep liblinear as an opt-in via --penalty-solvers, but default to stable solvers.
-_PENALTY_SOLVER_SPEC_DEFAULT = "l2:lbfgs,l2:saga,l1:saga,elasticnet:saga"
+_PENALTY_SOLVER_SPEC_DEFAULT = "l2:lbfgs,l2:liblinear,l2:saga,l1:liblinear,l1:saga,elasticnet:saga"
 
 
 def _repo_root() -> Path:
@@ -406,8 +404,8 @@ def main():
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--output-csv", default="clip_lr_redmeat_sweep.csv")
     p.add_argument("--sampler", choices=["tpe", "random"], default="tpe")
-    p.add_argument("--C-min", type=float, default=1e-6)
-    p.add_argument("--C-max", type=float, default=1e4)
+    p.add_argument("--C-min", type=float, default=1e-2)
+    p.add_argument("--C-max", type=float, default=1e2)
     p.add_argument("--max-iter", type=int, default=5000)
     p.add_argument(
         "--penalty-solvers",

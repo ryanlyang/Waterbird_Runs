@@ -2,10 +2,17 @@
 import argparse
 import csv
 import os
+import sys
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+
+
+_ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 import RedMeat_Runs.run_vanilla_redmeat as rvr
 
@@ -39,7 +46,15 @@ def _print_runtime_summary(tag: str, rows: list, num_epochs: int):
         print(f"[TIME] {tag}: median min/epoch=N/A (num_epochs <= 0)")
 
 
-def _build_run_args(args, seed: int, lr: float, weight_decay: float, momentum: float, nesterov: bool):
+def _build_run_args(
+    args,
+    seed: int,
+    base_lr: float,
+    classifier_lr: float,
+    weight_decay: float,
+    momentum: float,
+    nesterov: bool,
+):
     return SimpleNamespace(
         data_path=args.data_path,
         seed=seed,
@@ -47,7 +62,9 @@ def _build_run_args(args, seed: int, lr: float, weight_decay: float, momentum: f
         pretrained=args.pretrained,
         batch_size=args.batch_size,
         num_epochs=args.num_epochs,
-        lr=lr,
+        lr=base_lr,
+        base_lr=base_lr,
+        classifier_lr=classifier_lr,
         momentum=momentum,
         weight_decay=weight_decay,
         nesterov=nesterov,
@@ -60,33 +77,31 @@ def _build_run_args(args, seed: int, lr: float, weight_decay: float, momentum: f
 def _run_trial(trial_id: int, args, rng: np.random.Generator, sampler_name: str) -> dict:
     t0 = time.time()
     if sampler_name == "random":
-        lr = _loguniform(rng, args.lr_min, args.lr_max)
-        weight_decay = _loguniform(rng, args.wd_min, args.wd_max)
-        momentum = float(rng.uniform(args.momentum_min, args.momentum_max))
-        nesterov = bool(rng.integers(0, 2))
+        base_lr = _loguniform(rng, args.base_lr_min, args.base_lr_max)
+        classifier_lr = _loguniform(rng, args.cls_lr_min, args.cls_lr_max)
     else:
-        lr = float(args.trial.suggest_float("lr", args.lr_min, args.lr_max, log=True))
-        weight_decay = float(args.trial.suggest_float("weight_decay", args.wd_min, args.wd_max, log=True))
-        momentum = float(args.trial.suggest_float("momentum", args.momentum_min, args.momentum_max))
-        nesterov = bool(args.trial.suggest_categorical("nesterov", [False, True]))
+        base_lr = float(args.trial.suggest_float("base_lr", args.base_lr_min, args.base_lr_max, log=True))
+        classifier_lr = float(args.trial.suggest_float("classifier_lr", args.cls_lr_min, args.cls_lr_max, log=True))
 
     run_args = _build_run_args(
         args=args,
         seed=args.train_seed,
-        lr=lr,
-        weight_decay=weight_decay,
-        momentum=momentum,
-        nesterov=nesterov,
+        base_lr=base_lr,
+        classifier_lr=classifier_lr,
+        weight_decay=args.weight_decay,
+        momentum=args.momentum,
+        nesterov=args.nesterov,
     )
 
     best_balanced_val, test_acc, per_group, worst_group, ckpt = rvr.run_single(run_args)
 
     return {
         "trial": trial_id,
-        "lr": lr,
-        "weight_decay": weight_decay,
-        "momentum": momentum,
-        "nesterov": nesterov,
+        "base_lr": base_lr,
+        "classifier_lr": classifier_lr,
+        "weight_decay": args.weight_decay,
+        "momentum": args.momentum,
+        "nesterov": args.nesterov,
         "best_balanced_val_acc": best_balanced_val,
         "test_acc": test_acc,
         "per_group": per_group,
@@ -101,7 +116,7 @@ def main():
     p = argparse.ArgumentParser(description="Optuna/random sweep for vanilla RedMeat CNN.")
     p.add_argument("data_path", help="RedMeat dataset root containing all_images.csv")
 
-    p.add_argument("--n-trials", type=int, default=50)
+    p.add_argument("--n-trials", type=int, default=100)
     p.add_argument("--seed", type=int, default=0, help="Sweep sampler seed")
     p.add_argument("--train-seed", type=int, default=0, help="Fixed training seed during hyperparameter search")
     p.add_argument("--sampler", choices=["tpe", "random"], default="tpe")
@@ -114,30 +129,33 @@ def main():
     p.add_argument("--num-workers", type=int, default=4)
     p.add_argument("--checkpoint-dir", default="Vanilla_RedMeat_Checkpoints")
 
-    p.add_argument("--lr-min", type=float, default=1e-6)
-    p.add_argument("--lr-max", type=float, default=1e-2)
-    p.add_argument("--wd-min", type=float, default=1e-7)
-    p.add_argument("--wd-max", type=float, default=1e-3)
-    p.add_argument("--momentum-min", type=float, default=0.80)
-    p.add_argument("--momentum-max", type=float, default=0.98)
+    # Vanilla sweep now mirrors GALS-style two-LR setup.
+    p.add_argument("--base-lr-min", type=float, default=1e-5)
+    p.add_argument("--base-lr-max", type=float, default=5e-2)
+    p.add_argument("--cls-lr-min", type=float, default=1e-5)
+    p.add_argument("--cls-lr-max", type=float, default=5e-2)
+    p.add_argument("--weight-decay", type=float, default=1e-5)
+    p.add_argument("--momentum", type=float, default=0.9)
+    p.add_argument("--nesterov", action="store_true", default=False)
+    p.add_argument("--no-nesterov", action="store_false", dest="nesterov")
 
     p.add_argument("--output-csv", default="vanilla_redmeat_sweep.csv")
 
     p.add_argument("--post-seeds", type=int, default=5)
     p.add_argument("--post-seed-start", type=int, default=0)
     p.add_argument("--post-output-csv", default="vanilla_redmeat_best5.csv")
-
     p.add_argument(
         "--classes",
         default="prime_rib,pork_chop,steak,baby_back_ribs,filet_mignon",
-        help="Comma-separated class list; empty to infer from all_images.csv",
+        help="Comma-separated class list; empty to infer from all_images.csv.",
     )
 
     args = p.parse_args()
 
     header = [
         "trial",
-        "lr",
+        "base_lr",
+        "classifier_lr",
         "weight_decay",
         "momentum",
         "nesterov",
@@ -199,7 +217,8 @@ def main():
     post_header = [
         "phase",
         "seed",
-        "lr",
+        "base_lr",
+        "classifier_lr",
         "weight_decay",
         "momentum",
         "nesterov",
@@ -211,7 +230,8 @@ def main():
         "seconds",
     ]
 
-    best_lr = float(best_row["lr"])
+    best_base_lr = float(best_row["base_lr"])
+    best_classifier_lr = float(best_row["classifier_lr"])
     best_wd = float(best_row["weight_decay"])
     best_momentum = float(best_row["momentum"])
     best_nesterov = str(best_row["nesterov"]).lower() in ("1", "true", "yes")
@@ -223,7 +243,8 @@ def main():
         run_args = _build_run_args(
             args=args,
             seed=seed,
-            lr=best_lr,
+            base_lr=best_base_lr,
+            classifier_lr=best_classifier_lr,
             weight_decay=best_wd,
             momentum=best_momentum,
             nesterov=best_nesterov,
@@ -233,7 +254,8 @@ def main():
         row = {
             "phase": "best5",
             "seed": seed,
-            "lr": best_lr,
+            "base_lr": best_base_lr,
+            "classifier_lr": best_classifier_lr,
             "weight_decay": best_wd,
             "momentum": best_momentum,
             "nesterov": best_nesterov,

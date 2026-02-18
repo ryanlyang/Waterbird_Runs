@@ -47,6 +47,10 @@ MAX_HOURS=${MAX_HOURS:-}
 POST_SEEDS=${POST_SEEDS:-5}
 POST_SEED_START=${POST_SEED_START:-0}
 POST_KEEP=${POST_KEEP:-all}
+BASE_LR_MIN=${BASE_LR_MIN:-5e-5}
+BASE_LR_MAX=${BASE_LR_MAX:-1e-1}
+CLS_LR_MIN=${CLS_LR_MIN:-5e-5}
+CLS_LR_MAX=${CLS_LR_MAX:-1e-1}
 
 cd "$REPO_ROOT"
 export PYTHONPATH="$PWD:${PYTHONPATH:-}"
@@ -67,7 +71,10 @@ ARGS=(--method upweight
   --keep "$KEEP"
   --output-csv "$OUT_CSV"
   --logs-dir "$TRIAL_LOGS"
-  --tune-weight-decay
+  --base-lr-min "$BASE_LR_MIN"
+  --base-lr-max "$BASE_LR_MAX"
+  --cls-lr-min "$CLS_LR_MIN"
+  --cls-lr-max "$CLS_LR_MAX"
   --post-seeds "$POST_SEEDS"
   --post-seed-start "$POST_SEED_START"
   --post-keep "$POST_KEEP"

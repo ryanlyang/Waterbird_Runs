@@ -72,7 +72,8 @@ BASE_LR_MAX=${BASE_LR_MAX:-5e-2}
 CLS_LR_MIN=${CLS_LR_MIN:-1e-5}
 CLS_LR_MAX=${CLS_LR_MAX:-5e-2}
 WEIGHT_DECAY=${WEIGHT_DECAY:-1e-5}
-MOMENTUM=${MOMENTUM:-0.9}
+MOMENTUM_MIN=${MOMENTUM_MIN:-0.85}
+MOMENTUM_MAX=${MOMENTUM_MAX:-0.95}
 NESTEROV=${NESTEROV:-0}
 
 OUT_CSV=${OUT_CSV:-$LOG_DIR/vanilla100_sweep_${SLURM_JOB_ID}.csv}
@@ -110,7 +111,8 @@ ARGS=(
   --base-lr-min "$BASE_LR_MIN" --base-lr-max "$BASE_LR_MAX"
   --cls-lr-min "$CLS_LR_MIN" --cls-lr-max "$CLS_LR_MAX"
   --weight-decay "$WEIGHT_DECAY"
-  --momentum "$MOMENTUM"
+  --momentum-min "$MOMENTUM_MIN"
+  --momentum-max "$MOMENTUM_MAX"
   --output-csv "$OUT_CSV"
   --post-seeds "$POST_SEEDS"
   --post-seed-start "$POST_SEED_START"
