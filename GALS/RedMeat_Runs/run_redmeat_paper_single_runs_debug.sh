@@ -1,6 +1,6 @@
 #!/bin/bash -l
 # Debug launcher for paper-style single RedMeat runs:
-# GALS_ViT, ABN, UpWeight, Vanilla, and CLIP+LR on food-101-redmeat.
+# GALS (RN50 default), ABN, UpWeight, Vanilla, and CLIP+LR on food-101-redmeat.
 
 #SBATCH --account=reu-aisocial
 #SBATCH --partition=debug
@@ -60,6 +60,7 @@ CLIP_SOLVER=${CLIP_SOLVER:-lbfgs}
 CLIP_MAX_ITER=${CLIP_MAX_ITER:-5000}
 CLIP_FIT_INTERCEPT=${CLIP_FIT_INTERCEPT:-1}
 AUX_LOSSES_ON_VAL=${AUX_LOSSES_ON_VAL:-0}
+GALS_MODE=${GALS_MODE:-rn50}
 
 cd "$GALS_ROOT"
 export PYTHONPATH="$GALS_ROOT:${PYTHONPATH:-}"
@@ -72,6 +73,7 @@ echo "Logs dir: $RUN_LOG_DIR"
 echo "Output CSV: $OUT_CSV"
 echo "CLIP model/device: $CLIP_MODEL / $CLIP_DEVICE"
 echo "AUX_LOSSES_ON_VAL: $AUX_LOSSES_ON_VAL"
+echo "GALS_MODE: $GALS_MODE"
 which python
 
 python -c "import sklearn" >/dev/null 2>&1 || {
@@ -94,6 +96,7 @@ ARGS=(
   --clip-penalty "$CLIP_PENALTY"
   --clip-solver "$CLIP_SOLVER"
   --clip-max-iter "$CLIP_MAX_ITER"
+  --gals-mode "$GALS_MODE"
 )
 
 if [[ "$CLIP_FIT_INTERCEPT" -eq 1 ]]; then

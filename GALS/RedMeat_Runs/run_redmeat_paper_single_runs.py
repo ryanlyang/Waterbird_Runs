@@ -29,7 +29,14 @@ class TrainSpec:
     config: str
 
 
-TRAIN_SPECS = [
+TRAIN_SPECS_RN50 = [
+    TrainSpec("gals", "RedMeat_Runs/configs/redmeat_gals_rn50.yaml"),
+    TrainSpec("abn", "RedMeat_Runs/configs/redmeat_abn.yaml"),
+    TrainSpec("upweight", "RedMeat_Runs/configs/redmeat_upweight.yaml"),
+    TrainSpec("vanilla", "RedMeat_Runs/configs/redmeat_vanilla.yaml"),
+]
+
+TRAIN_SPECS_VIT = [
     TrainSpec("gals_vit", "RedMeat_Runs/configs/redmeat_gals_vit.yaml"),
     TrainSpec("abn", "RedMeat_Runs/configs/redmeat_abn.yaml"),
     TrainSpec("upweight", "RedMeat_Runs/configs/redmeat_upweight.yaml"),
@@ -92,7 +99,7 @@ def _extract_hparams_from_config(config_path: str, method: str) -> Dict[str, obj
         "batch_size": int(cfg.DATA.BATCH_SIZE),
     }
     losses = cfg.EXP.LOSSES
-    if method == "gals_vit":
+    if method in ("gals", "gals_vit"):
         hp["grad_outside_weight"] = float(losses.GRADIENT_OUTSIDE.WEIGHT)
         hp["grad_outside_criterion"] = str(losses.GRADIENT_OUTSIDE.CRITERION)
         hp["grad_outside_gt"] = str(losses.GRADIENT_OUTSIDE.GT)
@@ -297,7 +304,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Single-run RedMeat reference check using paper-config hyperparameters for "
-            "GALS_ViT, ABN, UpWeight, Vanilla, plus fixed CLIP+LR."
+            "GALS (RN50 by default), ABN, UpWeight, Vanilla, plus fixed CLIP+LR."
         )
     )
     parser.add_argument("--data-root", default="/home/ryreu/guided_cnn/Food101/data")
@@ -332,6 +339,12 @@ def main() -> None:
         action="store_false",
         dest="aux_losses_on_val",
     )
+    parser.add_argument(
+        "--gals-mode",
+        choices=("rn50", "vit", "both"),
+        default="rn50",
+        help="Which GALS variant(s) to run. Default 'rn50' matches paper-style GALS setup.",
+    )
     args = parser.parse_args()
 
     dataset_path = os.path.join(args.data_root, args.dataset_dir)
@@ -363,7 +376,16 @@ def main() -> None:
     python_exe = sys.executable
     rows: List[Dict[str, object]] = []
 
-    for spec in TRAIN_SPECS:
+    if args.gals_mode == "rn50":
+        train_specs = TRAIN_SPECS_RN50
+    elif args.gals_mode == "vit":
+        train_specs = TRAIN_SPECS_VIT
+    else:
+        train_specs = TRAIN_SPECS_RN50 + [
+            TrainSpec("gals_vit", "RedMeat_Runs/configs/redmeat_gals_vit.yaml")
+        ]
+
+    for spec in train_specs:
         config_path = spec.config
         run_name = f"{args.run_prefix}_{spec.method}_{ts}"
         print(f"[RUN] redmeat {spec.method} ({config_path})", flush=True)
