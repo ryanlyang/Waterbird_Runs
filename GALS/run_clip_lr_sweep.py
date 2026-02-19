@@ -19,7 +19,9 @@ _PENALTY_SOLVER_BASE_CHOICES = [
     ("l1", "saga", None),
     ("elasticnet", "saga", "suggest"),
 ]
-_PENALTY_SOLVER_SPEC_DEFAULT = "l2:lbfgs,l2:liblinear,l2:saga,l1:liblinear,l1:saga,elasticnet:saga"
+# Default to a conservative, stable subset. You can still opt into saga/elasticnet
+# explicitly via --penalty-solvers.
+_PENALTY_SOLVER_SPEC_DEFAULT = "l2:lbfgs,l2:liblinear,l1:liblinear"
 
 
 def _repo_root() -> Path:
@@ -198,8 +200,19 @@ def _parse_penalty_solver_choices(spec: str) -> List[Tuple[str, str, Optional[st
     return out
 
 
-def _suggest_penalty_solver(trial, choices) -> Tuple[str, str, Optional[float]]:
-    penalty, solver, l1_ratio = trial.suggest_categorical("penalty_solver", choices)
+def _choice_id(choice: Tuple[str, str, Optional[str]]) -> str:
+    penalty, solver, l1_ratio = choice
+    ratio_tag = "suggest" if l1_ratio == "suggest" else "none"
+    return f"{penalty}|{solver}|{ratio_tag}"
+
+
+def _suggest_penalty_solver(
+    trial,
+    choice_ids: List[str],
+    choice_by_id: Dict[str, Tuple[str, str, Optional[str]]],
+) -> Tuple[str, str, Optional[float]]:
+    choice_id = str(trial.suggest_categorical("penalty_solver", choice_ids))
+    penalty, solver, l1_ratio = choice_by_id[choice_id]
     if l1_ratio == "suggest":
         l1_ratio = float(trial.suggest_float("l1_ratio", 0.05, 0.95))
     return str(penalty), str(solver), l1_ratio
@@ -236,7 +249,11 @@ def _run_trial(
     else:
         C = float(args.trial.suggest_float("C", args.C_min, args.C_max, log=True))
         fit_intercept = bool(args.trial.suggest_categorical("fit_intercept", [True, False]))
-        penalty, solver, l1_ratio = _suggest_penalty_solver(args.trial, args.penalty_solver_choices)
+        penalty, solver, l1_ratio = _suggest_penalty_solver(
+            args.trial,
+            args.penalty_solver_ids,
+            args.penalty_solver_by_id,
+        )
 
     clf_kwargs = dict(
         random_state=args.seed,
@@ -395,6 +412,10 @@ def main():
     )
     args = p.parse_args()
     args.penalty_solver_choices = _parse_penalty_solver_choices(args.penalty_solvers)
+    args.penalty_solver_ids = [_choice_id(c) for c in args.penalty_solver_choices]
+    args.penalty_solver_by_id = {
+        cid: choice for cid, choice in zip(args.penalty_solver_ids, args.penalty_solver_choices)
+    }
 
     header = [
         "trial",
@@ -474,20 +495,24 @@ def main():
 
     if args.sampler == "random":
         for trial_id in range(args.n_trials):
-            row = _run_trial(
-                trial_id,
-                "random",
-                rng,
-                args,
-                X_train,
-                y_train,
-                X_val,
-                y_val,
-                g_val,
-                X_test,
-                y_test,
-                g_test,
-            )
+            try:
+                row = _run_trial(
+                    trial_id,
+                    "random",
+                    rng,
+                    args,
+                    X_train,
+                    y_train,
+                    X_val,
+                    y_val,
+                    g_val,
+                    X_test,
+                    y_test,
+                    g_test,
+                )
+            except Exception as exc:
+                print(f"[SWEEP] Trial {trial_id} failed: {exc}", flush=True)
+                continue
             _write_row(args.output_csv, row, header)
             sweep_rows.append(row)
             if best_row is None or score(row) > score(best_row):
@@ -505,20 +530,24 @@ def main():
         def objective(trial):
             nonlocal best_row
             args.trial = trial
-            row = _run_trial(
-                trial.number,
-                "tpe",
-                rng,
-                args,
-                X_train,
-                y_train,
-                X_val,
-                y_val,
-                g_val,
-                X_test,
-                y_test,
-                g_test,
-            )
+            try:
+                row = _run_trial(
+                    trial.number,
+                    "tpe",
+                    rng,
+                    args,
+                    X_train,
+                    y_train,
+                    X_val,
+                    y_val,
+                    g_val,
+                    X_test,
+                    y_test,
+                    g_test,
+                )
+            except Exception as exc:
+                print(f"[SWEEP] Trial {trial.number} failed: {exc}", flush=True)
+                return -1e12
             _write_row(args.output_csv, row, header)
             sweep_rows.append(row)
             if best_row is None or score(row) > score(best_row):

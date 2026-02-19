@@ -49,9 +49,12 @@ conda activate "$ENV_NAME"
 export TF_CPP_MIN_LOG_LEVEL=3
 export TF_ENABLE_ONEDNN_OPTS=0
 export WANDB_DISABLED=true
-export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
-export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
-export NUMEXPR_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+export VECLIB_MAXIMUM_THREADS=1
+export BLIS_NUM_THREADS=1
 export PYTHONNOUSERSITE=1
 
 REPO_ROOT=/home/ryreu/guided_cnn/waterbirds/Waterbird_Runs/GALS
@@ -67,6 +70,7 @@ OBJECTIVE=${OBJECTIVE:-val_avg_group_acc}
 C_MIN=${C_MIN:-1e-2}
 C_MAX=${C_MAX:-1e2}
 MAX_ITER=${MAX_ITER:-5000}
+PENALTY_SOLVERS=${PENALTY_SOLVERS:-l2:lbfgs,l2:liblinear,l1:liblinear}
 POST_SEEDS=${POST_SEEDS:-5}
 POST_SEED_START=${POST_SEED_START:-0}
 
@@ -106,6 +110,7 @@ echo "Repo: $REPO_ROOT"
 echo "Data: $DATA_PATH"
 echo "CLIP model: $CLIP_MODEL"
 echo "Trials: $N_TRIALS (sampler=$SAMPLER seed=$SWEEP_SEED objective=$OBJECTIVE)"
+echo "Penalty/solvers: $PENALTY_SOLVERS"
 echo "Output CSV: $OUT_CSV"
 echo "Post seeds: $POST_SEEDS (start=$POST_SEED_START)"
 echo "Post output CSV: $POST_OUT_CSV"
@@ -124,6 +129,7 @@ srun --unbuffered python -u run_clip_lr_sweep.py \
   --C-min "$C_MIN" \
   --C-max "$C_MAX" \
   --max-iter "$MAX_ITER" \
+  --penalty-solvers "$PENALTY_SOLVERS" \
   --objective "$OBJECTIVE" \
   --post-seeds "$POST_SEEDS" \
   --post-seed-start "$POST_SEED_START" \

@@ -36,6 +36,14 @@ redmeat_set_defaults
 redmeat_activate_env
 redmeat_prepare_food_layout "$DATA_ROOT" "$DATA_DIR"
 
+# Keep LR solver stack single-threaded to avoid sporadic BLAS/OpenMP crashes.
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+export VECLIB_MAXIMUM_THREADS=1
+export BLIS_NUM_THREADS=1
+
 REPO_ROOT="$GALS_ROOT"
 DATASET_ROOT="$DATA_ROOT/$DATA_DIR"
 
@@ -49,7 +57,7 @@ OBJECTIVE=${OBJECTIVE:-val_avg_group_acc}
 C_MIN=${C_MIN:-1e-2}
 C_MAX=${C_MAX:-1e2}
 MAX_ITER=${MAX_ITER:-5000}
-PENALTY_SOLVERS=${PENALTY_SOLVERS:-l2:lbfgs,l2:liblinear,l2:saga,l1:liblinear,l1:saga,elasticnet:saga}
+PENALTY_SOLVERS=${PENALTY_SOLVERS:-l2:lbfgs,l2:liblinear,l1:liblinear}
 POST_SEEDS=${POST_SEEDS:-5}
 POST_SEED_START=${POST_SEED_START:-0}
 
