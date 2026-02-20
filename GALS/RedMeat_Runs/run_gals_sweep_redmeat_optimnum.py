@@ -349,7 +349,8 @@ def run_one_trial(
         "weight_decay": weight_decay,
         "best_balanced_val_acc": best_balanced_val,
         "val_acc_for_optim": float(optim_metrics["val_acc"]),
-        "val_rev_kl": float(optim_metrics["val_rev_kl"]),
+        "val_ig_fwd_kl": float(optim_metrics["val_ig_fwd_kl"]),
+        "log_optim_num": float(optim_metrics["log_optim_num"]),
         "optim_value": float(optim_metrics["optim_value"]),
         "optim_beta": float(optim_beta),
         "test_acc": to_pct(test_metrics.get("test_acc")),
@@ -475,8 +476,8 @@ def main():
     parser.add_argument(
         "--optim-beta",
         type=float,
-        default=0.1,
-        help="Penalty strength in optim_value = val_acc * exp(-beta * rev_kl).",
+        default=10.0,
+        help="Penalty strength in log_optim_num = log(val_acc) - beta * ig_fwd_kl.",
     )
     parser.add_argument(
         "overrides",
@@ -500,7 +501,8 @@ def main():
         "weight_decay",
         "best_balanced_val_acc",
         "val_acc_for_optim",
-        "val_rev_kl",
+        "val_ig_fwd_kl",
+        "log_optim_num",
         "optim_value",
         "optim_beta",
         "test_acc",
@@ -788,8 +790,8 @@ def main():
                     "random",
                 )
                 print(
-                    f"[SWEEP] Trial {trial_id} done. optim_value={row['optim_value']:.6f} "
-                    f"(val_acc={row['val_acc_for_optim']:.4f}, rev_kl={row['val_rev_kl']:.6f})",
+                    f"[SWEEP] Trial {trial_id} done. log_optim_num={row['optim_value']:.6f} "
+                    f"(val_acc={row['val_acc_for_optim']:.4f}, ig_fwd_kl={row['val_ig_fwd_kl']:.6f})",
                     flush=True,
                 )
             except Exception as exc:
@@ -837,8 +839,8 @@ def main():
                 "tpe",
             )
             print(
-                f"[SWEEP] Trial {trial.number} done. optim_value={row['optim_value']:.6f} "
-                f"(val_acc={row['val_acc_for_optim']:.4f}, rev_kl={row['val_rev_kl']:.6f})",
+                f"[SWEEP] Trial {trial.number} done. log_optim_num={row['optim_value']:.6f} "
+                f"(val_acc={row['val_acc_for_optim']:.4f}, ig_fwd_kl={row['val_ig_fwd_kl']:.6f})",
                 flush=True,
             )
             return row["optim_value"] if row["optim_value"] is not None else -1.0
@@ -889,7 +891,8 @@ def main():
             "weight_decay",
             "best_balanced_val_acc",
             "val_acc_for_optim",
-            "val_rev_kl",
+            "val_ig_fwd_kl",
+            "log_optim_num",
             "optim_value",
             "optim_beta",
             "test_acc",
@@ -969,7 +972,8 @@ def main():
                     "weight_decay": row.get("weight_decay"),
                     "best_balanced_val_acc": row.get("best_balanced_val_acc"),
                     "val_acc_for_optim": row.get("val_acc_for_optim"),
-                    "val_rev_kl": row.get("val_rev_kl"),
+                    "val_ig_fwd_kl": row.get("val_ig_fwd_kl"),
+                    "log_optim_num": row.get("log_optim_num"),
                     "optim_value": row.get("optim_value"),
                     "optim_beta": row.get("optim_beta"),
                     "test_acc": row.get("test_acc"),
@@ -985,7 +989,7 @@ def main():
                 write_row(post_csv, out_row, post_header)
                 post_rows.append(out_row)
                 print(
-                    f"[POST] phase={phase_name} seed={s} optim_value={out_row['optim_value']} "
+                    f"[POST] phase={phase_name} seed={s} log_optim_num={out_row['optim_value']} "
                     f"per_group={out_row['per_group']} worst_group={out_row['worst_group']}",
                     flush=True,
                 )

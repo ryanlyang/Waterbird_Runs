@@ -130,7 +130,8 @@ def run_trial(trial_id, args, rng, sampler_name):
         "lr2_mult": lr2_mult,
         "best_balanced_val_acc": best_balanced_val,
         "val_acc_for_optim": float(optim_metrics["val_acc"]),
-        "val_rev_kl": float(optim_metrics["val_rev_kl"]),
+        "val_ig_fwd_kl": float(optim_metrics["val_ig_fwd_kl"]),
+        "log_optim_num": float(optim_metrics["log_optim_num"]),
         "optim_value": float(optim_metrics["optim_value"]),
         "optim_beta": float(args.optim_beta),
         "test_acc": test_acc,
@@ -176,7 +177,12 @@ def main():
     p.add_argument("--post-seeds", type=int, default=5)
     p.add_argument("--post-seed-start", type=int, default=0)
     p.add_argument("--post-output-csv", default=None)
-    p.add_argument("--optim-beta", type=float, default=0.1)
+    p.add_argument(
+        "--optim-beta",
+        type=float,
+        default=10.0,
+        help="Penalty strength in log_optim_num = log(val_acc) - beta * ig_fwd_kl.",
+    )
     p.add_argument("--keep", choices=["best", "all", "none"], default="best")
     p.add_argument("--post-keep", choices=["all", "none"], default="none")
     p.add_argument(
@@ -214,7 +220,8 @@ def main():
         "lr2_mult",
         "best_balanced_val_acc",
         "val_acc_for_optim",
-        "val_rev_kl",
+        "val_ig_fwd_kl",
+        "log_optim_num",
         "optim_value",
         "optim_beta",
         "test_acc",
@@ -261,8 +268,8 @@ def main():
             row = run_trial(trial_id, args, rng, "random")
             _record_trial_row(row)
             print(
-                f"[SWEEP] Trial {trial_id} done. optim_value={row['optim_value']:.6f} "
-                f"(val_acc={row['val_acc_for_optim']:.4f}, rev_kl={row['val_rev_kl']:.6f})"
+                f"[SWEEP] Trial {trial_id} done. log_optim_num={row['optim_value']:.6f} "
+                f"(val_acc={row['val_acc_for_optim']:.4f}, ig_fwd_kl={row['val_ig_fwd_kl']:.6f})"
             )
     else:
         import optuna
@@ -273,8 +280,8 @@ def main():
             row = run_trial(trial.number, args, rng, "tpe")
             _record_trial_row(row)
             print(
-                f"[SWEEP] Trial {trial.number} done. optim_value={row['optim_value']:.6f} "
-                f"(val_acc={row['val_acc_for_optim']:.4f}, rev_kl={row['val_rev_kl']:.6f})"
+                f"[SWEEP] Trial {trial.number} done. log_optim_num={row['optim_value']:.6f} "
+                f"(val_acc={row['val_acc_for_optim']:.4f}, ig_fwd_kl={row['val_ig_fwd_kl']:.6f})"
             )
             return row["optim_value"]
 
@@ -307,7 +314,8 @@ def main():
             "lr2_mult",
             "best_balanced_val_acc",
             "val_acc_for_optim",
-            "val_rev_kl",
+            "val_ig_fwd_kl",
+            "log_optim_num",
             "optim_value",
             "optim_beta",
             "test_acc",
@@ -373,7 +381,8 @@ def main():
                     "lr2_mult": best_lr2_mult,
                     "best_balanced_val_acc": best_balanced_val,
                     "val_acc_for_optim": float(optim_metrics["val_acc"]),
-                    "val_rev_kl": float(optim_metrics["val_rev_kl"]),
+                    "val_ig_fwd_kl": float(optim_metrics["val_ig_fwd_kl"]),
+                    "log_optim_num": float(optim_metrics["log_optim_num"]),
                     "optim_value": float(optim_metrics["optim_value"]),
                     "optim_beta": float(args.optim_beta),
                     "test_acc": test_acc,
@@ -389,7 +398,7 @@ def main():
                 if args.post_keep == "none":
                     _delete_checkpoint(out_row.get("checkpoint"))
                 print(
-                    f"[POST] {phase} seed={s} optim_value={out_row['optim_value']:.6f} "
+                    f"[POST] {phase} seed={s} log_optim_num={out_row['optim_value']:.6f} "
                     f"test_acc={test_acc:.2f}% worst_group={worst_group:.2f}%",
                     flush=True,
                 )

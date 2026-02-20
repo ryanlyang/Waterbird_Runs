@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Utilities for RedMeat Optuna objectives based on
-optim_value = val_acc * exp(-beta * reverse_kl).
+log_optim_num = log(val_acc) - beta * ig_fwd_kl.
 
 This module is intentionally standalone so new "optimnum" sweeps can run
 without altering existing sweep scripts.
@@ -89,8 +89,8 @@ def _resolve_checkpoint_path(checkpoint_path: str, *, cwd: Optional[str] = None)
     return os.path.abspath(os.path.join(cwd, checkpoint_path))
 
 
-def _reverse_kl_from_maps(pred_maps: torch.Tensor, gt_maps: torch.Tensor, eps: float = 1e-8) -> float:
-    """Compute mean reverse KL = KL(pred || gt) over a batch of saliency maps.
+def _forward_kl_from_maps(pred_maps: torch.Tensor, gt_maps: torch.Tensor, eps: float = 1e-8) -> float:
+    """Compute mean forward KL = KL(gt || pred) over a batch of saliency maps.
 
     pred_maps: [B, 1, H, W]
     gt_maps:   [B, 1, H, W]
@@ -107,8 +107,52 @@ def _reverse_kl_from_maps(pred_maps: torch.Tensor, gt_maps: torch.Tensor, eps: f
     p = p / p.sum(dim=1, keepdim=True)
     q = q / q.sum(dim=1, keepdim=True)
 
-    rev_kl = (p * (torch.log(p) - torch.log(q))).sum(dim=1)
-    return float(rev_kl.mean().detach().cpu().item())
+    fwd_kl = (q * (torch.log(q) - torch.log(p))).sum(dim=1)
+    return float(fwd_kl.mean().detach().cpu().item())
+
+
+def _integrated_gradients_saliency(
+    inputs: torch.Tensor,
+    cls_loss_fn,
+    *,
+    ig_steps: int = 16,
+) -> torch.Tensor:
+    """Compute RRR-style saliency via integrated gradients.
+
+    Uses a zero baseline and returns channel-collapsed |IG| saliency [B, 1, H, W].
+    """
+    if ig_steps < 1:
+        raise ValueError(f"ig_steps must be >= 1, got {ig_steps}")
+
+    baseline = torch.zeros_like(inputs)
+    delta = inputs - baseline
+    grad_sum = torch.zeros_like(inputs)
+
+    # Trapezoid/riemann-style integral approximation over alpha in (0, 1].
+    alphas = torch.linspace(
+        1.0 / float(ig_steps),
+        1.0,
+        ig_steps,
+        device=inputs.device,
+        dtype=inputs.dtype,
+    )
+
+    for alpha in alphas:
+        scaled_inputs = (baseline + alpha * delta).detach()
+        scaled_inputs.requires_grad_(True)
+        cls_loss = cls_loss_fn(scaled_inputs)
+        grads = torch.autograd.grad(
+            cls_loss,
+            scaled_inputs,
+            retain_graph=False,
+            create_graph=False,
+            allow_unused=False,
+        )[0]
+        grad_sum += grads
+
+    avg_grads = grad_sum / float(ig_steps)
+    ig = delta * avg_grads
+    return ig.abs().sum(dim=1, keepdim=True)
 
 
 def _loss_settings_for_method(cfg, method: str) -> Optional[Dict]:
@@ -138,13 +182,15 @@ def compute_main_checkpoint_optimnum(
     checkpoint_path: str,
     method: str,
     beta: float,
+    ig_steps: int = 16,
 ) -> Dict[str, float]:
-    """Evaluate val_acc and reverse KL for a trained main.py checkpoint.
+    """Evaluate val_acc and IG forward-KL for a trained main.py checkpoint.
 
     Returns dict with:
       val_acc (fraction in [0,1]),
-      val_rev_kl,
-      optim_value.
+      val_ig_fwd_kl,
+      log_optim_num,
+      optim_value (alias for log_optim_num for sweep compatibility).
     """
     args = _load_cfg(config_path, overrides=overrides)
 
@@ -152,7 +198,7 @@ def compute_main_checkpoint_optimnum(
 
     # For segmentation-guided configs (e.g., gals_ourmasks), some configs set
     # SEG_TRAIN_ONLY=True, which disables val masks. We force val segmentation on
-    # here because optimnum needs reverse-KL on the validation split.
+    # here because optimnum needs IG forward-KL on the validation split.
     if loss_settings is not None and str(loss_settings.get("GT", "")).lower() == "segmentation":
         args.DATA.SEG_TRAIN_ONLY = False
         args.DATA.RETURN_SEG = True
@@ -187,26 +233,26 @@ def compute_main_checkpoint_optimnum(
 
     total = 0
     total_correct = 0
-    revkl_weighted_sum = 0.0
-    revkl_count = 0
+    fwdkl_weighted_sum = 0.0
+    fwdkl_count = 0
 
     for batch in val_loader:
         inputs = batch["image"].to(approach.device)
         labels = batch["label"].to(approach.device)
-        inputs.requires_grad_(True)
 
-        if str(args.EXP.APPROACH) == "abn":
-            provided_att = approach.get_provided_att(batch)
-            if str(args.EXP.MODEL) == "resnet50_abn":
-                _att_logits, logits, _ = approach.net(inputs, provided_att=provided_att)
+        with torch.no_grad():
+            if str(args.EXP.APPROACH) == "abn":
+                provided_att = approach.get_provided_att(batch)
+                if str(args.EXP.MODEL) == "resnet50_abn":
+                    _att_logits, logits, _ = approach.net(inputs, provided_att=provided_att)
+                else:
+                    logits = approach.net(inputs, provided_att=provided_att)
             else:
-                logits = approach.net(inputs, provided_att=provided_att)
-        else:
-            net_out = approach.net(inputs)
-            if isinstance(net_out, (tuple, list)):
-                logits = net_out[0]
-            else:
-                logits = net_out
+                net_out = approach.net(inputs)
+                if isinstance(net_out, (tuple, list)):
+                    logits = net_out[0]
+                else:
+                    logits = net_out
 
         _, _, preds = gu.calc_preds(
             logits,
@@ -219,48 +265,68 @@ def compute_main_checkpoint_optimnum(
         total_correct += int((preds == labels).sum().item())
 
         if loss_settings is not None:
-            cls_loss = lu.calc_classification_loss(
-                approach.criterion,
-                approach.activation,
-                approach.classifier_classes,
-                logits,
-                labels,
-            )
+            if str(args.EXP.APPROACH) == "abn":
+                provided_att = approach.get_provided_att(batch)
+            else:
+                provided_att = None
 
-            if cls_loss.requires_grad and inputs.requires_grad:
-                dy_dx = torch.autograd.grad(cls_loss, inputs, retain_graph=False, create_graph=False)[0]
-                saliency = dy_dx.abs().sum(dim=1, keepdim=True)
+            def _cls_loss_fn(scaled_inputs: torch.Tensor) -> torch.Tensor:
+                if str(args.EXP.APPROACH) == "abn":
+                    if str(args.EXP.MODEL) == "resnet50_abn":
+                        _att_logits, scaled_logits, _ = approach.net(scaled_inputs, provided_att=provided_att)
+                    else:
+                        scaled_logits = approach.net(scaled_inputs, provided_att=provided_att)
+                else:
+                    scaled_out = approach.net(scaled_inputs)
+                    if isinstance(scaled_out, (tuple, list)):
+                        scaled_logits = scaled_out[0]
+                    else:
+                        scaled_logits = scaled_out
 
-                gt_maps, pred_maps = lu.get_gt_pred_attentions(
-                    loss_settings,
-                    "OPTIMNUM_REVKL",
-                    batch,
-                    inputs,
-                    approach.device,
-                    pred_attentions=saliency,
+                return lu.calc_classification_loss(
+                    approach.criterion,
+                    approach.activation,
+                    approach.classifier_classes,
+                    scaled_logits,
+                    labels,
                 )
-                if gt_maps is not None and pred_maps is not None and pred_maps.shape[0] > 0:
-                    b_rev = _reverse_kl_from_maps(pred_maps, gt_maps)
-                    n = int(pred_maps.shape[0])
-                    revkl_weighted_sum += b_rev * n
-                    revkl_count += n
+
+            saliency = _integrated_gradients_saliency(inputs, _cls_loss_fn, ig_steps=ig_steps)
+
+            gt_maps, pred_maps = lu.get_gt_pred_attentions(
+                loss_settings,
+                "OPTIMNUM_IG_FWDKL",
+                batch,
+                inputs,
+                approach.device,
+                pred_attentions=saliency,
+            )
+            if gt_maps is not None and pred_maps is not None and pred_maps.shape[0] > 0:
+                b_fwd = _forward_kl_from_maps(pred_maps, gt_maps)
+                n = int(pred_maps.shape[0])
+                fwdkl_weighted_sum += b_fwd * n
+                fwdkl_count += n
 
     if total == 0:
         raise RuntimeError("Validation loader had zero samples while computing optimnum.")
 
     val_acc = float(total_correct / total)
-    val_rev_kl = float(revkl_weighted_sum / revkl_count) if revkl_count > 0 else float("nan")
+    val_ig_fwd_kl = float(fwdkl_weighted_sum / fwdkl_count) if fwdkl_count > 0 else float("nan")
 
-    if not np.isfinite(val_rev_kl):
+    if not np.isfinite(val_ig_fwd_kl):
         # If no valid guidance masks appear in val, fall back to accuracy-only objective.
-        val_rev_kl = 0.0
+        val_ig_fwd_kl = 0.0
 
-    optim_value = float(val_acc * math.exp(-float(beta) * val_rev_kl))
+    log_optim_num = float(math.log(max(val_acc, 1e-12)) - float(beta) * val_ig_fwd_kl)
 
     return {
         "val_acc": val_acc,
-        "val_rev_kl": val_rev_kl,
-        "optim_value": optim_value,
+        "val_ig_fwd_kl": val_ig_fwd_kl,
+        "log_optim_num": log_optim_num,
+        # Compatibility alias used by sweep drivers (now in log-space).
+        "optim_value": log_optim_num,
+        # Legacy key retained for backward compatibility.
+        "val_rev_kl": val_ig_fwd_kl,
     }
 
 
@@ -276,6 +342,7 @@ def compute_guided_checkpoint_optimnum_png(
     beta: float,
     batch_size: int,
     num_workers: int = 4,
+    ig_steps: int = 16,
 ) -> Dict[str, float]:
     """Compute optimnum for guided PNG-mask runner checkpoints."""
     from RedMeat_Runs import run_guided_redmeat as rg_png
@@ -324,40 +391,44 @@ def compute_guided_checkpoint_optimnum_png(
 
     total = 0
     total_correct = 0
-    revkl_weighted_sum = 0.0
-    revkl_count = 0
+    fwdkl_weighted_sum = 0.0
+    fwdkl_count = 0
 
     for images, labels, masks, _paths in loader:
         images = images.to(device)
         labels = labels.to(device).long()
         masks = masks.to(device)
-        images.requires_grad_(True)
 
-        logits, _feats = model(images)
-        preds = logits.argmax(dim=1)
+        with torch.no_grad():
+            logits, _feats = model(images)
+            preds = logits.argmax(dim=1)
         total += int(labels.shape[0])
         total_correct += int((preds == labels).sum().item())
 
-        cls_loss = F.cross_entropy(logits, labels)
-        dy_dx = torch.autograd.grad(cls_loss, images, retain_graph=False, create_graph=False)[0]
-        saliency = dy_dx.abs().sum(dim=1, keepdim=True)
+        def _cls_loss_fn(scaled_images: torch.Tensor) -> torch.Tensor:
+            scaled_logits, _scaled_feats = model(scaled_images)
+            return F.cross_entropy(scaled_logits, labels)
 
-        b_rev = _reverse_kl_from_maps(saliency, masks)
+        saliency = _integrated_gradients_saliency(images, _cls_loss_fn, ig_steps=ig_steps)
+
+        b_fwd = _forward_kl_from_maps(saliency, masks)
         n = int(images.shape[0])
-        revkl_weighted_sum += b_rev * n
-        revkl_count += n
+        fwdkl_weighted_sum += b_fwd * n
+        fwdkl_count += n
 
     if total == 0:
         raise RuntimeError("Validation loader had zero samples while computing guided optimnum.")
 
     val_acc = float(total_correct / total)
-    val_rev_kl = float(revkl_weighted_sum / revkl_count) if revkl_count > 0 else 0.0
-    optim_value = float(val_acc * math.exp(-float(beta) * val_rev_kl))
+    val_ig_fwd_kl = float(fwdkl_weighted_sum / fwdkl_count) if fwdkl_count > 0 else 0.0
+    log_optim_num = float(math.log(max(val_acc, 1e-12)) - float(beta) * val_ig_fwd_kl)
 
     return {
         "val_acc": val_acc,
-        "val_rev_kl": val_rev_kl,
-        "optim_value": optim_value,
+        "val_ig_fwd_kl": val_ig_fwd_kl,
+        "log_optim_num": log_optim_num,
+        "optim_value": log_optim_num,
+        "val_rev_kl": val_ig_fwd_kl,
     }
 
 
@@ -377,6 +448,7 @@ def compute_guided_checkpoint_optimnum_pth(
     beta: float,
     batch_size: int,
     num_workers: int = 4,
+    ig_steps: int = 16,
 ) -> Dict[str, float]:
     """Compute optimnum for guided .pth-attention runner checkpoints."""
     from RedMeat_Runs import run_guided_redmeat_gals_vitatt as rg_vit
@@ -422,39 +494,43 @@ def compute_guided_checkpoint_optimnum_pth(
 
     total = 0
     total_correct = 0
-    revkl_weighted_sum = 0.0
-    revkl_count = 0
+    fwdkl_weighted_sum = 0.0
+    fwdkl_count = 0
 
     for images, labels, att_maps, _paths in loader:
         images = images.to(device)
         labels = labels.to(device).long()
         att_maps = att_maps.to(device)
-        images.requires_grad_(True)
 
-        logits, _feats = model(images)
-        preds = logits.argmax(dim=1)
+        with torch.no_grad():
+            logits, _feats = model(images)
+            preds = logits.argmax(dim=1)
 
         total += int(labels.shape[0])
         total_correct += int((preds == labels).sum().item())
 
-        cls_loss = F.cross_entropy(logits, labels)
-        dy_dx = torch.autograd.grad(cls_loss, images, retain_graph=False, create_graph=False)[0]
-        saliency = dy_dx.abs().sum(dim=1, keepdim=True)
+        def _cls_loss_fn(scaled_images: torch.Tensor) -> torch.Tensor:
+            scaled_logits, _scaled_feats = model(scaled_images)
+            return F.cross_entropy(scaled_logits, labels)
 
-        b_rev = _reverse_kl_from_maps(saliency, att_maps)
+        saliency = _integrated_gradients_saliency(images, _cls_loss_fn, ig_steps=ig_steps)
+
+        b_fwd = _forward_kl_from_maps(saliency, att_maps)
         n = int(images.shape[0])
-        revkl_weighted_sum += b_rev * n
-        revkl_count += n
+        fwdkl_weighted_sum += b_fwd * n
+        fwdkl_count += n
 
     if total == 0:
         raise RuntimeError("Validation loader had zero samples while computing guided optimnum.")
 
     val_acc = float(total_correct / total)
-    val_rev_kl = float(revkl_weighted_sum / revkl_count) if revkl_count > 0 else 0.0
-    optim_value = float(val_acc * math.exp(-float(beta) * val_rev_kl))
+    val_ig_fwd_kl = float(fwdkl_weighted_sum / fwdkl_count) if fwdkl_count > 0 else 0.0
+    log_optim_num = float(math.log(max(val_acc, 1e-12)) - float(beta) * val_ig_fwd_kl)
 
     return {
         "val_acc": val_acc,
-        "val_rev_kl": val_rev_kl,
-        "optim_value": optim_value,
+        "val_ig_fwd_kl": val_ig_fwd_kl,
+        "log_optim_num": log_optim_num,
+        "optim_value": log_optim_num,
+        "val_rev_kl": val_ig_fwd_kl,
     }

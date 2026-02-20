@@ -4,7 +4,7 @@ set -Eeuo pipefail
 # Submit the separate "optimnum" RedMeat experiment stack.
 #
 # Objective used by these new sweeps:
-#   optim_value = val_acc * exp(-beta * reverse_kl)
+#   log_optim_num = log(val_acc) - beta * ig_fwd_kl
 #
 # This script intentionally submits ONLY the new optimnum variants.
 # Existing baseline submit scripts are untouched.
@@ -44,7 +44,7 @@ MASK_DIR=${MASK_DIR:-/home/ryreu/guided_cnn/Food101/LearningToLook/code/WeCLIPPl
 N_TRIALS=${N_TRIALS:-50}
 POST_SEEDS=${POST_SEEDS:-5}
 POST_SEED_START=${POST_SEED_START:-0}
-OPTIM_BETA=${OPTIM_BETA:-0.1}
+OPTIM_BETA=${OPTIM_BETA:-10}
 SBATCH_TIME=${SBATCH_TIME:-15-00:00:00}
 
 EXPORT_SWEEP="ALL,N_TRIALS=${N_TRIALS},POST_SEEDS=${POST_SEEDS},POST_SEED_START=${POST_SEED_START},OPTIM_BETA=${OPTIM_BETA},PROJECT_ROOT=${PROJECT_ROOT},GALS_ROOT=${GALS_ROOT},DATA_ROOT=${DATA_ROOT},DATA_DIR=${DATA_DIR},LOG_DIR=${LOG_DIR},MASK_DIR=${MASK_DIR}"
