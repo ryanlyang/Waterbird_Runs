@@ -1,13 +1,13 @@
 #!/bin/bash -l
 #SBATCH --account=reu-aisocial
-#SBATCH --partition=debug
+#SBATCH --partition=tier3
 #SBATCH --gres=gpu:a100:1
-#SBATCH --time=0-06:00:00
+#SBATCH --time=15-00:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=24
 #SBATCH --mem=64G
-#SBATCH --output=/home/ryreu/guided_cnn/logsWaterbird/afr_waterbirds100_repro_debug_%j.out
-#SBATCH --error=/home/ryreu/guided_cnn/logsWaterbird/afr_waterbirds100_repro_debug_%j.err
+#SBATCH --output=/home/ryreu/guided_cnn/logsWaterbird/afr_waterbirds100_repro_tier3_%j.out
+#SBATCH --error=/home/ryreu/guided_cnn/logsWaterbird/afr_waterbirds100_repro_tier3_%j.err
 #SBATCH --signal=TERM@120
 
 set -Eeuo pipefail
@@ -26,19 +26,21 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 AFR_ROOT="${AFR_ROOT:-${REPO_ROOT}/afr}"
 
 DATA_DIR="${DATA_DIR:-/home/ryreu/guided_cnn/waterbirds/waterbird_1.0_forest2water2}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-/home/ryreu/guided_cnn/logsWaterbird/afr_repro_wb100_${SLURM_JOB_ID}}"
-LOGS_ROOT="${LOGS_ROOT:-/home/ryreu/guided_cnn/logsWaterbird/afr_repro_wb100_logs_${SLURM_JOB_ID}}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-/home/ryreu/guided_cnn/logsWaterbird/afr_repro_wb100_full_${SLURM_JOB_ID}}"
+LOGS_ROOT="${LOGS_ROOT:-/home/ryreu/guided_cnn/logsWaterbird/afr_repro_wb100_full_logs_${SLURM_JOB_ID}}"
 
-# Debug sanity defaults (override via env if needed).
-SEEDS="${SEEDS:-0}"
-FULL_PAPER_GRID="${FULL_PAPER_GRID:-0}"
-GAMMAS="${GAMMAS:-4,10,16}"
-REG_COEFFS="${REG_COEFFS:-0,0.2,0.4}"
+# Paper-faithful defaults:
+# Stage-1: 50 epochs SGD+cosine, LR=0.003, WD=1e-4 (set inside python runner).
+# Stage-2: 500 epochs, LR=0.01, gamma=linspace(4,20,33), reg={0,0.1,0.2,0.3,0.4}.
+SEEDS="${SEEDS:-0,21,42}"
+FULL_PAPER_GRID="${FULL_PAPER_GRID:-1}"
+GAMMAS="${GAMMAS:-4,6,8,10,12,14,16,18,20}"
+REG_COEFFS="${REG_COEFFS:-0,0.1,0.2,0.3,0.4}"
 
-STAGE1_EPOCHS="${STAGE1_EPOCHS:-5}"
-STAGE1_EVAL_FREQ="${STAGE1_EVAL_FREQ:-5}"
-STAGE1_SAVE_FREQ="${STAGE1_SAVE_FREQ:-5}"
-STAGE2_EPOCHS="${STAGE2_EPOCHS:-30}"
+STAGE1_EPOCHS="${STAGE1_EPOCHS:-50}"
+STAGE1_EVAL_FREQ="${STAGE1_EVAL_FREQ:-10}"
+STAGE1_SAVE_FREQ="${STAGE1_SAVE_FREQ:-10}"
+STAGE2_EPOCHS="${STAGE2_EPOCHS:-500}"
 STAGE2_LR="${STAGE2_LR:-0.01}"
 
 cd "${SCRIPT_DIR}"
@@ -92,3 +94,4 @@ else
 fi
 
 srun --unbuffered python -u run_afr_waterbirds_repro.py "${ARGS[@]}"
+
