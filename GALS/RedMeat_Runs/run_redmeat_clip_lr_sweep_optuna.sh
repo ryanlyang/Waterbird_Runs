@@ -52,12 +52,14 @@ SWEEP_SEED=${SWEEP_SEED:-0}
 SAMPLER=${SAMPLER:-tpe}
 CLIP_MODEL=${CLIP_MODEL:-RN50}
 BATCH_SIZE=${BATCH_SIZE:-256}
-NUM_WORKERS=${NUM_WORKERS:-4}
+# Keep 0 by default to avoid fork-related instability after CUDA feature extraction.
+NUM_WORKERS=${NUM_WORKERS:-0}
 OBJECTIVE=${OBJECTIVE:-val_avg_group_acc}
 C_MIN=${C_MIN:-1e-2}
 C_MAX=${C_MAX:-1e2}
 MAX_ITER=${MAX_ITER:-5000}
-PENALTY_SOLVERS=${PENALTY_SOLVERS:-l2:lbfgs,l2:liblinear,l1:liblinear}
+# Prefer liblinear-only defaults; lbfgs has shown sporadic native crashes on some nodes.
+PENALTY_SOLVERS=${PENALTY_SOLVERS:-l2:liblinear,l1:liblinear}
 POST_SEEDS=${POST_SEEDS:-5}
 POST_SEED_START=${POST_SEED_START:-0}
 
