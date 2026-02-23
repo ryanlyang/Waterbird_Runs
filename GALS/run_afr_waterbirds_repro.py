@@ -96,6 +96,9 @@ def _extract_stage2_stats(metrics_path: Path) -> Dict[str, float]:
 
 def _run_cmd(cmd: List[str], cwd: Path, log_path: Path) -> None:
     _ensure_dir(log_path.parent)
+    # AFR scripts (notably train_embeddings.py) save auxiliary plots to ./logs/.
+    # Ensure it exists in the command working directory to avoid late-stage crashes.
+    _ensure_dir(cwd / "logs")
     with log_path.open("w", encoding="utf-8") as lf:
         lf.write("[CMD] " + " ".join(cmd) + "\n")
         lf.flush()
