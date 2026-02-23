@@ -6,7 +6,7 @@ import random
 from types import SimpleNamespace
 
 import numpy as np
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 
 import torch
 import torch.nn as nn
@@ -168,10 +168,26 @@ class WaterbirdsMetadataDatasetPthAttention(Dataset):
     def __len__(self):
         return len(self.paths)
 
+    @staticmethod
+    def _open_rgb_with_retry(path: str, retries: int = 5, sleep_s: float = 0.2) -> Image.Image:
+        last_exc = None
+        for attempt in range(retries):
+            try:
+                with Image.open(path) as im:
+                    im.load()
+                    return im.convert("RGB")
+            except (UnidentifiedImageError, OSError, ValueError) as exc:
+                last_exc = exc
+                if attempt + 1 < retries:
+                    time.sleep(sleep_s)
+                    continue
+                break
+        raise last_exc
+
     def __getitem__(self, idx):
         path = self.paths[idx]
         label = int(self.labels[idx])
-        img = Image.open(path).convert("RGB")
+        img = self._open_rgb_with_retry(path)
         if self.image_transform is not None:
             img = self.image_transform(img)
 
@@ -229,6 +245,7 @@ def run_single(args, attn_epoch, kl_value, kl_increment=None):
     seed_everything(SEED)
     g = torch.Generator()
     g.manual_seed(SEED)
+    num_workers = base.get_num_workers(default=4)
 
     train_dataset = WaterbirdsMetadataDatasetPthAttention(
         data_root=args.data_path,
@@ -270,7 +287,7 @@ def run_single(args, attn_epoch, kl_value, kl_increment=None):
             train_dataset,
             batch_size=batch_size,
             shuffle=True,
-            num_workers=4,
+            num_workers=num_workers,
             worker_init_fn=seed_worker,
             generator=g,
         ),
@@ -278,7 +295,7 @@ def run_single(args, attn_epoch, kl_value, kl_increment=None):
             val_dataset,
             batch_size=batch_size,
             shuffle=False,
-            num_workers=4,
+            num_workers=num_workers,
             worker_init_fn=seed_worker,
             generator=g,
         ),
@@ -288,7 +305,7 @@ def run_single(args, attn_epoch, kl_value, kl_increment=None):
         test_dataset,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=4,
+        num_workers=num_workers,
         worker_init_fn=seed_worker,
         generator=g,
     )

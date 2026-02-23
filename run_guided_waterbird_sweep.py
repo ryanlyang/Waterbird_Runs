@@ -134,7 +134,11 @@ def main():
     sweep_rows = []
     if args.sampler == "random":
         for trial_id in range(args.n_trials):
-            row = run_trial(trial_id, args, rng, "random")
+            try:
+                row = run_trial(trial_id, args, rng, "random")
+            except Exception as exc:
+                print(f"[SWEEP] Trial {trial_id} failed: {exc}", flush=True)
+                continue
             write_row(args.output_csv, row, header)
             sweep_rows.append(row)
             if best_row is None or row["best_balanced_val_acc"] > best_row["best_balanced_val_acc"]:
@@ -155,7 +159,7 @@ def main():
             return row["best_balanced_val_acc"]
 
         study = optuna.create_study(direction="maximize")
-        study.optimize(objective, n_trials=args.n_trials)
+        study.optimize(objective, n_trials=args.n_trials, catch=(Exception,))
 
     if best_row is not None:
         print("[SWEEP] Best trial:")

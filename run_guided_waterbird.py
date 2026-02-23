@@ -7,7 +7,7 @@ import random
 
 import cv2
 import numpy as np
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 
 import torch
 import torch.nn as nn
@@ -31,6 +31,34 @@ checkpoint_dir = "ResNet_Checkpoints"
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 SEED = 0
 
+
+
+def get_num_workers(default: int = 4) -> int:
+    """Allow lowering worker count for flaky shared storage: GUIDED_NUM_WORKERS=0/1/..."""
+    try:
+        return max(0, int(os.environ.get("GUIDED_NUM_WORKERS", default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _open_pil_with_retry(path: str, mode: str, retries: int = 5, sleep_s: float = 0.2) -> Image.Image:
+    """
+    Robust image/mask open for transient filesystem read issues.
+    Loads full image bytes on each attempt before returning.
+    """
+    last_exc = None
+    for attempt in range(retries):
+        try:
+            with Image.open(path) as im:
+                im.load()
+                return im.convert(mode)
+        except (UnidentifiedImageError, OSError, ValueError) as exc:
+            last_exc = exc
+            if attempt + 1 < retries:
+                time.sleep(sleep_s)
+                continue
+            break
+    raise last_exc
 
 
 def seed_everything(seed: int):
@@ -167,7 +195,7 @@ class GuidedImageFolder(Dataset):
         img, label = self.images[idx]
         path, _ = self.images.samples[idx]
         mask_path = os.path.join(self.mask_root, mask_name_from_path(path))
-        mask = Image.open(mask_path).convert("L")
+        mask = _open_pil_with_retry(mask_path, "L")
         if self.mask_transform:
             mask = self.mask_transform(mask)
         return img, label, mask, path
@@ -204,7 +232,7 @@ class WaterbirdsMetadataDataset(Dataset):
     def __getitem__(self, idx):
         path = self.paths[idx]
         label = int(self.labels[idx])
-        img = Image.open(path).convert('RGB')
+        img = _open_pil_with_retry(path, "RGB")
         if self.image_transform is not None:
             img = self.image_transform(img)
 
@@ -212,7 +240,7 @@ class WaterbirdsMetadataDataset(Dataset):
 
         if self.return_mask:
             mask_path = os.path.join(self.mask_root, mask_name_from_path(path))
-            mask = Image.open(mask_path).convert("L")
+            mask = _open_pil_with_retry(mask_path, "L")
             if self.mask_transform:
                 mask = self.mask_transform(mask)
             output.append(mask)
@@ -474,6 +502,7 @@ def run_single(args, attn_epoch, kl_value, kl_increment=None):
 
     seed_everything(SEED)
     g = torch.Generator(); g.manual_seed(SEED)
+    num_workers = get_num_workers(default=4)
 
     metadata_path = os.path.join(args.data_path, 'metadata.csv')
     if os.path.exists(metadata_path):
@@ -506,9 +535,9 @@ def run_single(args, attn_epoch, kl_value, kl_increment=None):
         num_classes = len(np.unique(train_dataset.labels))
         dataloaders = {
             'train': DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
-                                num_workers=4, worker_init_fn=seed_worker, generator=g),
+                                num_workers=num_workers, worker_init_fn=seed_worker, generator=g),
             'val': DataLoader(val_dataset, batch_size=batch_size, shuffle=False,
-                              num_workers=4, worker_init_fn=seed_worker, generator=g),
+                              num_workers=num_workers, worker_init_fn=seed_worker, generator=g),
         }
         dataset_sizes = {
             'train': len(train_dataset),
@@ -533,9 +562,9 @@ def run_single(args, attn_epoch, kl_value, kl_increment=None):
         num_classes = len(full_train.images.classes)
         dataloaders = {
             'train': DataLoader(train_subset, batch_size=batch_size, shuffle=True,
-                                num_workers=4, worker_init_fn=seed_worker, generator=g),
+                                num_workers=num_workers, worker_init_fn=seed_worker, generator=g),
             'val': DataLoader(val_subset, batch_size=batch_size, shuffle=False,
-                              num_workers=4, worker_init_fn=seed_worker, generator=g),
+                              num_workers=num_workers, worker_init_fn=seed_worker, generator=g),
         }
         dataset_sizes = {
             'train': len(train_subset),
@@ -543,7 +572,7 @@ def run_single(args, attn_epoch, kl_value, kl_increment=None):
         }
 
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False,
-                             num_workers=4, worker_init_fn=seed_worker, generator=g)
+                             num_workers=num_workers, worker_init_fn=seed_worker, generator=g)
 
     model = make_cam_model(num_classes, model_name="resnet50", pretrained=True).to(device)
 

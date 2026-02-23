@@ -38,6 +38,38 @@ def print_runtime_summary(tag, rows, num_epochs):
         print(f"[TIME] {tag}: median min/epoch=N/A")
 
 
+def _coerce_existing_row(row):
+    out = dict(row)
+    int_keys = ["trial", "attention_epoch", "seconds"]
+    float_keys = [
+        "kl_lambda",
+        "kl_incr",
+        "base_lr",
+        "classifier_lr",
+        "lr2_mult",
+        "best_balanced_val_acc",
+        "test_acc",
+        "per_group",
+        "worst_group",
+    ]
+    for k in int_keys:
+        if k in out and str(out[k]).strip() != "":
+            out[k] = int(float(out[k]))
+    for k in float_keys:
+        if k in out and str(out[k]).strip() != "":
+            out[k] = float(out[k])
+    return out
+
+
+def load_existing_rows(csv_path):
+    if not csv_path or not os.path.exists(csv_path):
+        return []
+    with open(csv_path, newline="") as f:
+        reader = csv.DictReader(f)
+        rows = [_coerce_existing_row(r) for r in reader]
+    return rows
+
+
 def run_trial(trial_id, args, rng, sampler_name):
     t0 = time.time()
     if sampler_name == "random":
@@ -123,6 +155,11 @@ def main():
     parser.add_argument("--post-seeds", type=int, default=5)
     parser.add_argument("--post-seed-start", type=int, default=0)
     parser.add_argument("--post-output-csv", default=None)
+    parser.add_argument(
+        "--resume-csv",
+        default=None,
+        help="Optional existing sweep CSV to resume from. Prior completed trials are loaded into Optuna.",
+    )
     args = parser.parse_args()
 
     if args.num_epochs is not None:
@@ -153,6 +190,13 @@ def main():
     ]
 
     rng = np.random.default_rng(args.seed)
+    existing_rows = []
+    if args.resume_csv:
+        existing_rows = load_existing_rows(args.resume_csv)
+        if existing_rows:
+            print(f"[RESUME] Loaded {len(existing_rows)} existing rows from: {args.resume_csv}")
+        else:
+            print(f"[RESUME] No existing rows found at: {args.resume_csv}. Starting fresh.")
 
     if args.sampler == "tpe":
         try:
@@ -162,10 +206,29 @@ def main():
             args.sampler = "random"
 
     best_row = None
-    sweep_rows = []
+    sweep_rows = list(existing_rows)
+    if existing_rows:
+        best_row = max(existing_rows, key=lambda r: float(r["best_balanced_val_acc"]))
+
+    next_trial_id = 0
+    if existing_rows:
+        next_trial_id = int(max(int(r["trial"]) for r in existing_rows) + 1)
+
+    remaining_trials = max(0, int(args.n_trials) - len(existing_rows))
+    if remaining_trials == 0:
+        print(
+            f"[RESUME] Existing completed rows ({len(existing_rows)}) already reach n_trials={args.n_trials}. "
+            "Skipping sweep execution."
+        )
+
     if args.sampler == "random":
-        for trial_id in range(args.n_trials):
-            row = run_trial(trial_id, args, rng, "random")
+        for i in range(remaining_trials):
+            trial_id = next_trial_id + i
+            try:
+                row = run_trial(trial_id, args, rng, "random")
+            except Exception as exc:
+                print(f"[SWEEP] Trial {trial_id} failed: {exc}", flush=True)
+                continue
             write_row(args.output_csv, row, header)
             sweep_rows.append(row)
             if best_row is None or row["best_balanced_val_acc"] > best_row["best_balanced_val_acc"]:
@@ -173,6 +236,38 @@ def main():
             print(f"[SWEEP] Trial {trial_id} done. best_balanced_val_acc={row['best_balanced_val_acc']:.4f}")
     else:
         import optuna
+
+        study = optuna.create_study(direction="maximize")
+
+        if existing_rows:
+            distributions = {
+                "attention_epoch": optuna.distributions.IntDistribution(args.attn_min, args.attn_max),
+                "kl_lambda": optuna.distributions.FloatDistribution(args.kl_min, args.kl_max, log=True),
+                "base_lr": optuna.distributions.FloatDistribution(args.base_lr_min, args.base_lr_max, log=True),
+                "classifier_lr": optuna.distributions.FloatDistribution(args.cls_lr_min, args.cls_lr_max, log=True),
+                "lr2_mult": optuna.distributions.FloatDistribution(args.lr2_mult_min, args.lr2_mult_max, log=True),
+            }
+            added = 0
+            for r in existing_rows:
+                try:
+                    params = {
+                        "attention_epoch": int(r["attention_epoch"]),
+                        "kl_lambda": float(r["kl_lambda"]),
+                        "base_lr": float(r["base_lr"]),
+                        "classifier_lr": float(r["classifier_lr"]),
+                        "lr2_mult": float(r["lr2_mult"]),
+                    }
+                    value = float(r["best_balanced_val_acc"])
+                    trial = optuna.trial.create_trial(
+                        params=params,
+                        distributions=distributions,
+                        value=value,
+                    )
+                    study.add_trial(trial)
+                    added += 1
+                except Exception as exc:
+                    print(f"[RESUME] Skipping malformed resume row (trial={r.get('trial')}): {exc}")
+            print(f"[RESUME] Added {added} prior trials into Optuna study state.")
 
         def objective(trial):
             nonlocal best_row
@@ -185,8 +280,8 @@ def main():
             print(f"[SWEEP] Trial {trial.number} done. best_balanced_val_acc={row['best_balanced_val_acc']:.4f}")
             return row["best_balanced_val_acc"]
 
-        study = optuna.create_study(direction="maximize")
-        study.optimize(objective, n_trials=args.n_trials)
+        if remaining_trials > 0:
+            study.optimize(objective, n_trials=remaining_trials, catch=(Exception,))
 
     if best_row is not None:
         print("[SWEEP] Best trial:")
