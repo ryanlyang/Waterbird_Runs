@@ -104,7 +104,17 @@ eval "$(
 python - <<'PY'
 import importlib.util
 import sys
-mods = ["torch", "torchvision", "timm", "pandas", "numpy", "wandb"]
+mods = [
+    "torch",
+    "torchvision",
+    "numpy",
+    "timm",
+    "pandas",
+    "wandb",
+    "wilds",
+    "einops",
+    "transformers",
+]
 missing = [m for m in mods if importlib.util.find_spec(m) is None]
 hard = [m for m in missing if m in ("torch", "torchvision", "numpy")]
 soft = [m for m in missing if m not in ("torch", "torchvision", "numpy")]
