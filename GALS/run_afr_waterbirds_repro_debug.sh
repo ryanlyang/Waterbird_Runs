@@ -21,9 +21,47 @@ export NUMEXPR_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export WANDB_DISABLED=true
 export PYTHONNOUSERSITE=1
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
-AFR_ROOT="${AFR_ROOT:-${REPO_ROOT}/afr}"
+SCRIPT_PATH_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+SUBMIT_DIR="${SBATCH_SUBMIT_DIR:-}"
+
+# Slurm runs a copied script from /var/spool; prefer resolving from submit dir.
+REPO_ROOT_CANDIDATES=(
+  "${REPO_ROOT:-}"
+  "${SUBMIT_DIR}/GALS"
+  "${SUBMIT_DIR}"
+  "${SCRIPT_PATH_DIR}"
+)
+REPO_ROOT=""
+for candidate in "${REPO_ROOT_CANDIDATES[@]}"; do
+  if [[ -n "$candidate" && -f "$candidate/run_afr_waterbirds_repro.py" ]]; then
+    REPO_ROOT="$(cd -- "$candidate" && pwd)"
+    break
+  fi
+done
+if [[ -z "$REPO_ROOT" ]]; then
+  echo "[ERROR] Could not locate GALS repo root containing run_afr_waterbirds_repro.py" >&2
+  echo "Checked: ${REPO_ROOT_CANDIDATES[*]}" >&2
+  exit 2
+fi
+
+AFR_ROOT_CANDIDATES=(
+  "${AFR_ROOT:-}"
+  "${REPO_ROOT}/../afr"
+  "${REPO_ROOT}/afr"
+  "${SUBMIT_DIR}/afr"
+)
+AFR_ROOT=""
+for candidate in "${AFR_ROOT_CANDIDATES[@]}"; do
+  if [[ -n "$candidate" && -d "$candidate" && -f "$candidate/train_supervised.py" ]]; then
+    AFR_ROOT="$(cd -- "$candidate" && pwd)"
+    break
+  fi
+done
+if [[ -z "$AFR_ROOT" ]]; then
+  echo "[ERROR] Could not locate AFR root containing train_supervised.py" >&2
+  echo "Checked: ${AFR_ROOT_CANDIDATES[*]}" >&2
+  exit 2
+fi
 
 DATA_DIR="${DATA_DIR:-/home/ryreu/guided_cnn/waterbirds/waterbird_complete95_forest2water2}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-/home/ryreu/guided_cnn/logsWaterbird/afr_repro_${SLURM_JOB_ID}}"
@@ -37,11 +75,14 @@ REG_COEFFS="${REG_COEFFS:-0,0.1,0.2,0.3,0.4}"
 STAGE1_EPOCHS="${STAGE1_EPOCHS:-50}"
 STAGE2_EPOCHS="${STAGE2_EPOCHS:-500}"
 STAGE2_LR="${STAGE2_LR:-0.01}"
+AUTO_INSTALL_AFR_DEPS="${AUTO_INSTALL_AFR_DEPS:-1}"
 
-cd "${SCRIPT_DIR}"
+cd "${REPO_ROOT}"
 
 echo "[$(date)] Host: $(hostname)"
-echo "SCRIPT_DIR=${SCRIPT_DIR}"
+echo "SCRIPT_PATH_DIR=${SCRIPT_PATH_DIR}"
+echo "SBATCH_SUBMIT_DIR=${SUBMIT_DIR:-<unset>}"
+echo "REPO_ROOT=${REPO_ROOT}"
 echo "AFR_ROOT=${AFR_ROOT}"
 echo "DATA_DIR=${DATA_DIR}"
 echo "OUTPUT_ROOT=${OUTPUT_ROOT}"
@@ -55,16 +96,35 @@ echo "GAMMAS=${GAMMAS}"
 echo "REG_COEFFS=${REG_COEFFS}"
 which python
 
+eval "$(
 python - <<'PY'
 import importlib.util
 import sys
 mods = ["torch", "torchvision", "timm", "pandas", "numpy", "wandb"]
 missing = [m for m in mods if importlib.util.find_spec(m) is None]
-if missing:
-    print("[ERROR] Missing Python packages:", ", ".join(missing), file=sys.stderr)
-    print("Install AFR deps first (see afr/scripts/requirements.sh).", file=sys.stderr)
-    raise SystemExit(2)
+hard = [m for m in missing if m in ("torch", "torchvision", "numpy")]
+soft = [m for m in missing if m not in ("torch", "torchvision", "numpy")]
+print('HARD_MISSING="' + " ".join(hard) + '"')
+print('SOFT_MISSING="' + " ".join(soft) + '"')
 PY
+)"
+
+if [[ -n "${HARD_MISSING:-}" ]]; then
+  echo "[ERROR] Missing required core packages: ${HARD_MISSING}" >&2
+  echo "Install/activate the correct env first." >&2
+  exit 2
+fi
+
+if [[ -n "${SOFT_MISSING:-}" ]]; then
+  if [[ "${AUTO_INSTALL_AFR_DEPS}" == "1" ]]; then
+    echo "[INFO] Installing missing AFR deps: ${SOFT_MISSING}"
+    python -m pip install --no-cache-dir ${SOFT_MISSING}
+  else
+    echo "[ERROR] Missing Python packages: ${SOFT_MISSING}" >&2
+    echo "Set AUTO_INSTALL_AFR_DEPS=1 or install manually." >&2
+    exit 2
+  fi
+fi
 
 ARGS=(
   --afr-root "${AFR_ROOT}"
