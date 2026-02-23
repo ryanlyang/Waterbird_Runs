@@ -22,7 +22,7 @@ export WANDB_DISABLED=true
 export PYTHONNOUSERSITE=1
 
 SCRIPT_PATH_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-SUBMIT_DIR="${SBATCH_SUBMIT_DIR:-}"
+SUBMIT_DIR="${SLURM_SUBMIT_DIR:-${SBATCH_SUBMIT_DIR:-${PWD:-}}}"
 
 # Slurm runs a copied script from /var/spool; prefer resolving from submit dir.
 REPO_ROOT_CANDIDATES=(
@@ -81,7 +81,8 @@ cd "${REPO_ROOT}"
 
 echo "[$(date)] Host: $(hostname)"
 echo "SCRIPT_PATH_DIR=${SCRIPT_PATH_DIR}"
-echo "SBATCH_SUBMIT_DIR=${SUBMIT_DIR:-<unset>}"
+echo "SLURM_SUBMIT_DIR=${SLURM_SUBMIT_DIR:-<unset>}"
+echo "SUBMIT_DIR_USED=${SUBMIT_DIR:-<unset>}"
 echo "REPO_ROOT=${REPO_ROOT}"
 echo "AFR_ROOT=${AFR_ROOT}"
 echo "DATA_DIR=${DATA_DIR}"
