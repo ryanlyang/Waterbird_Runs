@@ -320,10 +320,18 @@ def run_one_trial(
             f"Cannot compute optim_value. See {trial_log}"
         )
 
+    # Reuse the same dataset-location overrides for post-train optim metric eval.
+    # Without these, optimnum_metric_redmeat reloads YAML defaults and may fall back
+    # to relative paths like ./data/food-101-redmeat.
+    eval_overrides = list(extra_overrides or [])
+    eval_overrides = upsert_override(eval_overrides, "DATA.ROOT", data_root)
+    eval_overrides = upsert_override(eval_overrides, "DATA.FOOD_SUBSET_DIR", dataset_dir)
+    eval_overrides = upsert_override(eval_overrides, "DATA.SUBDIR", dataset_dir)
+
     try:
         optim_metrics = compute_main_checkpoint_optimnum(
             config_path=config,
-            overrides=list(extra_overrides or []),
+            overrides=eval_overrides,
             checkpoint_path=checkpoint_used,
             method=method,
             beta=float(optim_beta),
