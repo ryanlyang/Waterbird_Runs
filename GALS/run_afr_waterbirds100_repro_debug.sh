@@ -81,6 +81,10 @@ AUTO_INSTALL_AFR_DEPS="${AUTO_INSTALL_AFR_DEPS:-1}"
 
 cd "${REPO_ROOT}"
 
+# AFR train_embeddings.py writes plots to ./logs/ relative to AFR root.
+# Ensure it exists up front to avoid late-stage FileNotFoundError.
+mkdir -p "${AFR_ROOT}/logs"
+
 echo "[$(date)] Host: $(hostname)"
 echo "SCRIPT_PATH_DIR=${SCRIPT_PATH_DIR}"
 echo "SLURM_SUBMIT_DIR=${SLURM_SUBMIT_DIR:-<unset>}"
