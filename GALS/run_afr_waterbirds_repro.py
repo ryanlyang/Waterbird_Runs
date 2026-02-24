@@ -70,6 +70,34 @@ def _metric_max(metrics: Dict[int, Dict[str, float]], key: str) -> Optional[floa
     return best
 
 
+def _row_value(row: Dict[str, float], key: str) -> Optional[float]:
+    if key not in row:
+        return None
+    val = row[key]
+    if val is None:
+        return None
+    try:
+        out = float(val)
+    except Exception:
+        return None
+    if not math.isfinite(out):
+        return None
+    return out
+
+
+def _argmax_epoch(metrics: Dict[int, Dict[str, float]], key: str) -> Optional[int]:
+    best_epoch: Optional[int] = None
+    best_val: Optional[float] = None
+    for epoch, row in metrics.items():
+        v = _row_value(row, key)
+        if v is None:
+            continue
+        if best_val is None or v > best_val:
+            best_val = v
+            best_epoch = int(epoch)
+    return best_epoch
+
+
 def _load_metrics(metrics_path: Path) -> Dict[int, Dict[str, float]]:
     with metrics_path.open("rb") as f:
         obj = pickle.load(f)
@@ -85,13 +113,25 @@ def _extract_stage2_stats(metrics_path: Path) -> Dict[str, float]:
     best_test_wga = _metric_max(m, "best_test_wga")
     best_val_mean = _metric_max(m, "best_val_mean")
     best_test_mean = _metric_max(m, "best_test_mean")
-    return {
+    selected_epoch = _argmax_epoch(m, "val_worst_accuracy")
+    selected_row = m[selected_epoch] if selected_epoch is not None else {}
+
+    out = {
         "best_val_wga": _float_or_nan(best_val_wga),
         "best_test_at_val": _float_or_nan(best_test_at_val),
         "best_test_wga": _float_or_nan(best_test_wga),
         "best_val_mean": _float_or_nan(best_val_mean),
         "best_test_mean": _float_or_nan(best_test_mean),
+        "selected_epoch": float("nan") if selected_epoch is None else float(selected_epoch),
     }
+
+    # Group-wise accuracies at the checkpoint selected by validation WGA.
+    for split in ("val", "test"):
+        for group in ("0_0", "1_0", "2_0", "3_0"):
+            key = f"{split}_accuracy_{group}"
+            out[f"{split}_acc_{group}"] = _float_or_nan(_row_value(selected_row, key))
+
+    return out
 
 
 def _run_cmd(cmd: List[str], cwd: Path, log_path: Path) -> None:
@@ -188,6 +228,7 @@ def run(args: argparse.Namespace) -> None:
     print(f"[INFO] OUTPUT_ROOT={output_root}")
     print(f"[INFO] LOGS_ROOT={run_logs}")
     print(f"[INFO] Seeds={seeds}")
+    print(f"[INFO] Stage1 scheduler={args.stage1_scheduler}")
     print(f"[INFO] Stage2 gammas ({len(gammas)}): {gammas[:5]}{' ...' if len(gammas) > 5 else ''}")
     print(f"[INFO] Stage2 reg_coeffs ({len(regs)}): {regs}")
 
@@ -220,7 +261,7 @@ def run(args: argparse.Namespace) -> None:
                 f"--num_epochs={args.stage1_epochs}",
                 "--batch_size=32",
                 "--optimizer=sgd_optimizer",
-                "--scheduler=cosine_lr_scheduler",
+                f"--scheduler={args.stage1_scheduler}",
                 "--init_lr=0.003",
                 "--weight_decay=1e-4",
             ]
@@ -305,7 +346,12 @@ def run(args: argparse.Namespace) -> None:
             "[BEST] "
             f"seed={seed} gamma={seed_best['gamma']} reg={seed_best['reg_coeff']} "
             f"best_val_wga={float(seed_best['best_val_wga']):.4f} "
-            f"best_test_at_val={float(seed_best['best_test_at_val']):.4f}"
+            f"best_test_at_val={float(seed_best['best_test_at_val']):.4f} "
+            f"(test groups: "
+            f"{float(seed_best['test_acc_0_0']):.4f}, "
+            f"{float(seed_best['test_acc_1_0']):.4f}, "
+            f"{float(seed_best['test_acc_2_0']):.4f}, "
+            f"{float(seed_best['test_acc_3_0']):.4f})"
         )
 
     stage2_csv = output_root / "afr_waterbirds_stage2_all.csv"
@@ -322,6 +368,15 @@ def run(args: argparse.Namespace) -> None:
             "best_test_wga",
             "best_val_mean",
             "best_test_mean",
+            "selected_epoch",
+            "val_acc_0_0",
+            "val_acc_1_0",
+            "val_acc_2_0",
+            "val_acc_3_0",
+            "test_acc_0_0",
+            "test_acc_1_0",
+            "test_acc_2_0",
+            "test_acc_3_0",
             "stage1_dir",
             "stage2_dir",
             "metrics_path",
@@ -339,6 +394,15 @@ def run(args: argparse.Namespace) -> None:
             "best_test_wga",
             "best_val_mean",
             "best_test_mean",
+            "selected_epoch",
+            "val_acc_0_0",
+            "val_acc_1_0",
+            "val_acc_2_0",
+            "val_acc_3_0",
+            "test_acc_0_0",
+            "test_acc_1_0",
+            "test_acc_2_0",
+            "test_acc_3_0",
             "stage1_dir",
             "stage2_dir",
             "metrics_path",
@@ -353,6 +417,17 @@ def run(args: argparse.Namespace) -> None:
         mean_best = float("nan")
         std_best = float("nan")
 
+    group_stats: Dict[str, Tuple[float, float]] = {}
+    for group in ("0_0", "1_0", "2_0", "3_0"):
+        key = f"test_acc_{group}"
+        vals = [float(r[key]) for r in best_rows if key in r and math.isfinite(float(r[key]))]
+        if not vals:
+            group_stats[group] = (float("nan"), float("nan"))
+            continue
+        g_mean = statistics.mean(vals)
+        g_std = statistics.pstdev(vals) if len(vals) > 1 else 0.0
+        group_stats[group] = (g_mean, g_std)
+
     summary_txt = output_root / "afr_waterbirds_summary.txt"
     with summary_txt.open("w", encoding="utf-8") as f:
         f.write(f"AFR Waterbirds reproduction summary\n")
@@ -360,11 +435,15 @@ def run(args: argparse.Namespace) -> None:
         f.write(f"DATA_DIR: {data_dir}\n")
         f.write(f"Seeds: {seeds}\n")
         f.write(f"Stage1 epochs: {args.stage1_epochs}\n")
+        f.write(f"Stage1 scheduler: {args.stage1_scheduler}\n")
         f.write(f"Stage2 epochs: {args.stage2_epochs}\n")
         f.write(f"Gammas: {gammas}\n")
         f.write(f"Reg coeffs: {regs}\n")
         f.write(f"Mean best test@val WGA: {mean_best:.4f}\n")
         f.write(f"Std best test@val WGA: {std_best:.4f}\n")
+        for group in ("0_0", "1_0", "2_0", "3_0"):
+            g_mean, g_std = group_stats[group]
+            f.write(f"Mean test@val group {group}: {g_mean:.4f} +/- {g_std:.4f}\n")
         f.write(f"Best-per-seed CSV: {best_csv}\n")
         f.write(f"All stage2 CSV: {stage2_csv}\n")
 
@@ -373,6 +452,9 @@ def run(args: argparse.Namespace) -> None:
     print(f"Best by seed:        {best_csv}")
     print(f"Summary:             {summary_txt}")
     print(f"Mean best test@val WGA across seeds: {mean_best:.4f} +/- {std_best:.4f}")
+    for group in ("0_0", "1_0", "2_0", "3_0"):
+        g_mean, g_std = group_stats[group]
+        print(f"Mean test@val group {group}: {g_mean:.4f} +/- {g_std:.4f}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -404,13 +486,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--seeds",
-        default="0,21,42",
+        default="0,1,2",
         help="Comma-separated list of seeds for stage1+stage2",
     )
 
     parser.add_argument("--stage1-epochs", type=int, default=50)
     parser.add_argument("--stage1-eval-freq", type=int, default=10)
     parser.add_argument("--stage1-save-freq", type=int, default=10)
+    parser.add_argument(
+        "--stage1-scheduler",
+        default="constant_lr_scheduler",
+        choices=["constant_lr_scheduler", "cosine_lr_scheduler"],
+        help="Stage-1 LR scheduler; paper Waterbirds setup uses constant_lr_scheduler.",
+    )
     parser.add_argument("--stage2-epochs", type=int, default=500)
     parser.add_argument("--stage2-lr", type=float, default=1e-2)
 
