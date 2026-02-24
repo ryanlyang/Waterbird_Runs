@@ -20,8 +20,9 @@ LOG_DIR=${LOG_DIR:-/home/ryreu/guided_cnn/logsWaterbird}
 DATA_ROOT=${DATA_ROOT:-/home/ryreu/guided_cnn/waterbirds/waterbird_1.0_forest2water2}
 SWEEP_GT_ROOT=${SWEEP_GT_ROOT:-/home/ryreu/guided_cnn/waterbirds/L100/LearningToLook/code/WeCLIPPlus/results/val/prediction_cmap}
 
+# Default targets failed WB100 guided sweep job 21056087.
 # Override if your failed job CSV has a different id.
-RESUME_CSV=${RESUME_CSV:-/home/ryreu/guided_cnn/logsWaterbird/guided_waterbird_sweep_21056086.csv}
+RESUME_CSV=${RESUME_CSV:-/home/ryreu/guided_cnn/logsWaterbird/guided_sweep_100_21056087.csv}
 N_TRIALS=${N_TRIALS:-50}
 
 # Resume in-place by default.
