@@ -2,10 +2,10 @@
 #SBATCH --account=reu-aisocial
 #SBATCH --partition=debug
 #SBATCH --gres=gpu:a100:1
-#SBATCH --time=0-23:00:00
+#SBATCH --time=5-00:00:00
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=128G
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=16G
 #SBATCH --output=/home/ryreu/guided_cnn/logsRedMeat/redmeat_vit_attention_gen_%j.out
 #SBATCH --error=/home/ryreu/guided_cnn/logsRedMeat/redmeat_vit_attention_gen_%j.err
 #SBATCH --signal=TERM@120

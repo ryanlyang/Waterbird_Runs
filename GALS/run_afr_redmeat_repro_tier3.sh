@@ -2,10 +2,10 @@
 #SBATCH --account=reu-aisocial
 #SBATCH --partition=tier3
 #SBATCH --gres=gpu:a100:1
-#SBATCH --time=15-00:00:00
+#SBATCH --time=5-00:00:00
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=32G
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=16G
 #SBATCH --output=/home/ryreu/guided_cnn/logsRedMeat/afr_redmeat_repro_tier3_%j.out
 #SBATCH --error=/home/ryreu/guided_cnn/logsRedMeat/afr_redmeat_repro_tier3_%j.err
 #SBATCH --signal=TERM@120

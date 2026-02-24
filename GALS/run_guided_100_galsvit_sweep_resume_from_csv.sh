@@ -2,9 +2,9 @@
 #SBATCH --account=reu-aisocial
 #SBATCH --partition=tier3
 #SBATCH --gres=gpu:a100:1
-#SBATCH --time=15-00:00:00
+#SBATCH --time=8-00:00:00
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
 #SBATCH --output=/home/ryreu/guided_cnn/logsWaterbird/guided_100_galsvit_resume_%j.out
 #SBATCH --error=/home/ryreu/guided_cnn/logsWaterbird/guided_100_galsvit_resume_%j.err
