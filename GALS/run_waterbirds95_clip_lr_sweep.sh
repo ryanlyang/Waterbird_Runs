@@ -5,7 +5,7 @@
 #SBATCH --account=reu-aisocial
 #SBATCH --partition=tier3
 #SBATCH --gres=gpu:a100:1
-#SBATCH --time=8-00:00:00
+#SBATCH --time=5-00:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
