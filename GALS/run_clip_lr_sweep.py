@@ -19,9 +19,9 @@ _PENALTY_SOLVER_BASE_CHOICES = [
     ("l1", "saga", None),
     ("elasticnet", "saga", "suggest"),
 ]
-# Default to a conservative, stable subset. You can still opt into saga/elasticnet
-# explicitly via --penalty-solvers.
-_PENALTY_SOLVER_SPEC_DEFAULT = "l2:lbfgs,l2:liblinear,l1:liblinear"
+# Default to the most stable solver in this environment. You can still opt into
+# liblinear/saga/elasticnet explicitly via --penalty-solvers.
+_PENALTY_SOLVER_SPEC_DEFAULT = "l2:lbfgs"
 
 
 def _repo_root() -> Path:
@@ -163,9 +163,14 @@ def _extract_features(
                 g = g[:, 0]
             groups.append(g)
 
-    X = np.concatenate(feats, axis=0).astype(np.float32)
-    y = np.concatenate(labels, axis=0).astype(np.int64)
-    grp = np.concatenate(groups, axis=0).astype(np.int64)
+    X = np.concatenate(feats, axis=0).astype(np.float64, copy=False)
+    X = np.ascontiguousarray(X, dtype=np.float64)
+    # Guard sklearn solver calls from non-finite values that can trigger
+    # low-level crashes in some BLAS/solver stacks.
+    if not np.isfinite(X).all():
+        X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
+    y = np.concatenate(labels, axis=0).astype(np.int64, copy=False)
+    grp = np.concatenate(groups, axis=0).astype(np.int64, copy=False)
     return X, y, grp
 
 
@@ -269,7 +274,12 @@ def _run_trial(
         clf_kwargs["l1_ratio"] = float(l1_ratio)
 
     clf = LogisticRegression(**clf_kwargs)
-    clf.fit(X_train, y_train)
+    try:
+        from threadpoolctl import threadpool_limits
+        with threadpool_limits(limits=1):
+            clf.fit(X_train, y_train)
+    except Exception:
+        clf.fit(X_train, y_train)
 
     val_pred = clf.predict(X_val)
     val_acc = float(np.mean((val_pred == y_val).astype(np.float64)) * 100.0)
@@ -342,7 +352,12 @@ def _run_fixed_params(
         clf_kwargs["l1_ratio"] = float(l1_ratio)
 
     clf = LogisticRegression(**clf_kwargs)
-    clf.fit(X_train, y_train)
+    try:
+        from threadpoolctl import threadpool_limits
+        with threadpool_limits(limits=1):
+            clf.fit(X_train, y_train)
+    except Exception:
+        clf.fit(X_train, y_train)
 
     val_pred = clf.predict(X_val)
     val_acc = float(np.mean((val_pred == y_val).astype(np.float64)) * 100.0)
@@ -384,7 +399,7 @@ def main():
     p.add_argument("--clip-model", default="RN50", help='CLIP model name (e.g. "RN50", "ViT-B/32").')
     p.add_argument("--device", default="cuda", help='Torch device for CLIP feature extraction (e.g. "cuda", "cpu").')
     p.add_argument("--batch-size", type=int, default=256)
-    p.add_argument("--num-workers", type=int, default=4)
+    p.add_argument("--num-workers", type=int, default=0)
     p.add_argument("--n-trials", type=int, default=100)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--output-csv", default="clip_lr_sweep.csv")
@@ -476,10 +491,10 @@ def main():
     X_val = _l2_normalize(X_val)
     X_test = _l2_normalize(X_test)
 
-    # Make sklearn happy (avoid float64).
-    X_train = X_train.astype(np.float32, copy=False)
-    X_val = X_val.astype(np.float32, copy=False)
-    X_test = X_test.astype(np.float32, copy=False)
+    # Keep solver inputs contiguous float64 for numerical robustness.
+    X_train = np.ascontiguousarray(X_train, dtype=np.float64)
+    X_val = np.ascontiguousarray(X_val, dtype=np.float64)
+    X_test = np.ascontiguousarray(X_test, dtype=np.float64)
 
     print("[CLIP-LR] Feature extraction complete. Starting LR sweep...")
     # Free GPU memory for safety.
