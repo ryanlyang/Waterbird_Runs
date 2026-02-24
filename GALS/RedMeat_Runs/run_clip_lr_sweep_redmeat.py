@@ -20,9 +20,9 @@ _PENALTY_SOLVER_BASE_CHOICES = [
     ("l1", "saga", None),
     ("elasticnet", "saga", "suggest"),
 ]
-# Default to a conservative, stable subset. You can still opt into saga/elasticnet
+# Default to a conservative, stable subset. You can still opt into lbfgs/saga
 # explicitly via --penalty-solvers.
-_PENALTY_SOLVER_SPEC_DEFAULT = "l2:lbfgs,l2:liblinear,l1:liblinear"
+_PENALTY_SOLVER_SPEC_DEFAULT = "l2:liblinear,l1:liblinear"
 
 
 def _repo_root() -> Path:
@@ -150,9 +150,26 @@ def _extract_features(samples: List[_Sample], model, preprocess, device: str, ba
             feats.append(f.cpu().numpy())
             labels.append(y.numpy())
 
-    X = np.concatenate(feats, axis=0).astype(np.float32)
+    X = np.concatenate(feats, axis=0).astype(np.float64, copy=False)
+    X = np.ascontiguousarray(X, dtype=np.float64)
+    # Guard sklearn/native solver calls from non-finite values that can trigger
+    # low-level crashes in some BLAS/solver stacks.
+    if not np.isfinite(X).all():
+        X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
     y = np.concatenate(labels, axis=0).astype(np.int64)
     return X, y
+
+
+def _safe_fit(clf, X_train: np.ndarray, y_train: np.ndarray):
+    # Force a single-threaded BLAS/OpenMP context during fit to reduce
+    # segfault risk on shared cluster nodes.
+    try:
+        from threadpoolctl import threadpool_limits
+
+        with threadpool_limits(limits=1):
+            clf.fit(X_train, y_train)
+    except Exception:
+        clf.fit(X_train, y_train)
 
 
 def _build_splits(
@@ -302,7 +319,7 @@ def _run_trial(
         clf_kwargs["l1_ratio"] = float(l1_ratio)
 
     clf = LogisticRegression(**clf_kwargs)
-    clf.fit(X_train, y_train)
+    _safe_fit(clf, X_train, y_train)
 
     val_pred = clf.predict(X_val)
     val_acc = float(np.mean((val_pred == y_val).astype(np.float64)) * 100.0)
@@ -374,7 +391,7 @@ def _run_fixed_params(
         clf_kwargs["l1_ratio"] = float(l1_ratio)
 
     clf = LogisticRegression(**clf_kwargs)
-    clf.fit(X_train, y_train)
+    _safe_fit(clf, X_train, y_train)
 
     val_pred = clf.predict(X_val)
     val_acc = float(np.mean((val_pred == y_val).astype(np.float64)) * 100.0)
@@ -519,9 +536,9 @@ def main():
     print("[CLIP-LR] Extracting test features...")
     X_test, y_test = _extract_features(test_samples, model, preprocess, args.device, args.batch_size, args.num_workers)
 
-    X_train = _l2_normalize(X_train).astype(np.float32, copy=False)
-    X_val = _l2_normalize(X_val).astype(np.float32, copy=False)
-    X_test = _l2_normalize(X_test).astype(np.float32, copy=False)
+    X_train = np.ascontiguousarray(_l2_normalize(X_train), dtype=np.float64)
+    X_val = np.ascontiguousarray(_l2_normalize(X_val), dtype=np.float64)
+    X_test = np.ascontiguousarray(_l2_normalize(X_test), dtype=np.float64)
 
     print("[CLIP-LR] Feature extraction complete. Starting LR sweep...")
     if "cuda" in args.device:
