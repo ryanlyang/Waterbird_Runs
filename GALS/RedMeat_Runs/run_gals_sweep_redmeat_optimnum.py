@@ -199,6 +199,8 @@ def run_one_trial(
 ):
     if run_name is None:
         run_name = f"{method}_trial_{trial_id:03d}"
+    data_root = os.path.abspath(os.path.expanduser(str(data_root)))
+    dataset_dir = str(dataset_dir)
 
     cmd = [
         python_exe,
@@ -335,6 +337,8 @@ def run_one_trial(
             checkpoint_path=checkpoint_used,
             method=method,
             beta=float(optim_beta),
+            data_root=data_root,
+            dataset_dir=dataset_dir,
         )
     except Exception as exc:
         raise RuntimeError(

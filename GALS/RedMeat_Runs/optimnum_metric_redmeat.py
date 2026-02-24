@@ -182,6 +182,8 @@ def compute_main_checkpoint_optimnum(
     checkpoint_path: str,
     method: str,
     beta: float,
+    data_root: Optional[str] = None,
+    dataset_dir: Optional[str] = None,
     ig_steps: int = 16,
 ) -> Dict[str, float]:
     """Evaluate val_acc and IG forward-KL for a trained main.py checkpoint.
@@ -193,6 +195,15 @@ def compute_main_checkpoint_optimnum(
       optim_value (alias for log_optim_num for sweep compatibility).
     """
     args = _load_cfg(config_path, overrides=overrides)
+
+    # Force data location from caller for robustness. In some SLURM runs,
+    # relying on OmegaConf dotlist overrides alone can still leave DATA.ROOT
+    # at defaults (e.g., "./data"), which breaks post-trial metric eval.
+    if data_root is not None:
+        args.DATA.ROOT = str(data_root)
+    if dataset_dir is not None:
+        args.DATA.FOOD_SUBSET_DIR = str(dataset_dir)
+        args.DATA.SUBDIR = str(dataset_dir)
 
     loss_settings = _loss_settings_for_method(args, method)
 
@@ -214,6 +225,15 @@ def compute_main_checkpoint_optimnum(
     )
 
     Dataset = _dataset_cls(str(args.DATA.DATASET))
+    if str(args.DATA.DATASET) == "food_subset":
+        resolved_root = os.path.join(str(args.DATA.ROOT), str(args.DATA.FOOD_SUBSET_DIR))
+        resolved_train = os.path.join(resolved_root, "train")
+        if not os.path.isdir(resolved_train):
+            raise FileNotFoundError(
+                "Resolved food_subset train split not found for optimnum eval: "
+                f"{resolved_train} (DATA.ROOT={args.DATA.ROOT}, "
+                f"DATA.FOOD_SUBSET_DIR={args.DATA.FOOD_SUBSET_DIR})"
+            )
     val_dataset = Dataset(root=args.DATA.ROOT, cfg=args, transform=transform, split="val")
     val_loader = DataLoader(
         val_dataset,
