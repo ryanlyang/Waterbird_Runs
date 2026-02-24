@@ -572,6 +572,7 @@ def evaluate_dataset(
             "missing_images": st.missing_images,
             "missing_masks": st.missing_masks,
             "errors": st.errors,
+            "mask_lookup_note": "",
         }
         for g in range(4):
             row[f"group_{GROUP_NAMES[g]}_hits"] = st.group_hits[g]
