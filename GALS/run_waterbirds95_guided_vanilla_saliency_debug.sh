@@ -35,10 +35,17 @@ GUIDED_GT_ROOT=${GUIDED_GT_ROOT:-/home/ryreu/guided_cnn/waterbirds/LearningToLoo
 OUT_DIR_DEFAULT="${LOG_ROOT}/wb95_guided_vanilla_gals_saliency_${SLURM_JOB_ID:-local_$(date +%Y%m%d_%H%M%S)}"
 OUT_DIR=${OUT_DIR:-$OUT_DIR_DEFAULT}
 
-NUM_VAL_SAMPLES=${NUM_VAL_SAMPLES:-50}
+NUM_VAL_SAMPLES=${NUM_VAL_SAMPLES:-150}
 SAMPLE_SEED=${SAMPLE_SEED:-0}
 SAMPLE_STRATEGY=${SAMPLE_STRATEGY:-balanced}
 TARGET_CLASS=${TARGET_CLASS:-label}
+SALIENCY_METHOD=${SALIENCY_METHOD:-rise}
+RISE_NUM_MASKS=${RISE_NUM_MASKS:-2000}
+RISE_GRID_SIZE=${RISE_GRID_SIZE:-8}
+RISE_P1=${RISE_P1:-0.1}
+RISE_GPU_BATCH=${RISE_GPU_BATCH:-16}
+RISE_SEED=${RISE_SEED:-0}
+RISE_MASKS_PATH=${RISE_MASKS_PATH:-}
 
 # Guided fixed params (from run_guided_waterbirds95_bestfixed_multigt_debug.sh)
 GUIDED_SEED=${GUIDED_SEED:-0}
@@ -103,6 +110,7 @@ echo "Data: $DATA_PATH"
 echo "Guided GT root: $GUIDED_GT_ROOT"
 echo "Output dir: $OUT_DIR"
 echo "Num val samples: $NUM_VAL_SAMPLES (seed=$SAMPLE_SEED strategy=$SAMPLE_STRATEGY target_class=$TARGET_CLASS)"
+echo "Saliency: method=$SALIENCY_METHOD rise_num_masks=$RISE_NUM_MASKS rise_grid_size=$RISE_GRID_SIZE rise_p1=$RISE_P1 rise_gpu_batch=$RISE_GPU_BATCH rise_seed=$RISE_SEED rise_masks_path=${RISE_MASKS_PATH:-AUTO}"
 echo "Guided params: attn=$GUIDED_ATTENTION_EPOCH kl=$GUIDED_KL_LAMBDA kl_incr=$GUIDED_KL_INCR base_lr=$GUIDED_BASE_LR cls_lr=$GUIDED_CLASSIFIER_LR lr2_mult=$GUIDED_LR2_MULT seed=$GUIDED_SEED workers=$GUIDED_NUM_WORKERS"
 echo "Vanilla params: base_lr=$VANILLA_BASE_LR cls_lr=$VANILLA_CLASSIFIER_LR momentum=$VANILLA_MOMENTUM wd=$VANILLA_WEIGHT_DECAY seed=$VANILLA_SEED workers=$VANILLA_NUM_WORKERS nesterov=$VANILLA_NESTEROV"
 echo "GALS-ViT params: run=$RUN_GALS cfg=$GALS_CONFIG data_root=$GALS_DATA_ROOT wb_dir=$GALS_WATERBIRDS_DIR att_dir=$GALS_ATTENTION_DIR base_lr=$GALS_BASE_LR cls_lr=$GALS_CLASSIFIER_LR grad_weight=$GALS_GRAD_WEIGHT grad_criterion=$GALS_GRAD_CRITERION wd=$GALS_WEIGHT_DECAY momentum=$GALS_MOMENTUM seed=$GALS_SEED workers=$GALS_NUM_WORKERS"
@@ -117,6 +125,12 @@ CMD=(
   --sample-seed "$SAMPLE_SEED"
   --sample-strategy "$SAMPLE_STRATEGY"
   --target-class "$TARGET_CLASS"
+  --saliency-method "$SALIENCY_METHOD"
+  --rise-num-masks "$RISE_NUM_MASKS"
+  --rise-grid-size "$RISE_GRID_SIZE"
+  --rise-p1 "$RISE_P1"
+  --rise-gpu-batch "$RISE_GPU_BATCH"
+  --rise-seed "$RISE_SEED"
   --guided-seed "$GUIDED_SEED"
   --guided-attention-epoch "$GUIDED_ATTENTION_EPOCH"
   --guided-kl-lambda "$GUIDED_KL_LAMBDA"
@@ -159,6 +173,9 @@ if [[ -n "$VANILLA_CKPT" ]]; then
 fi
 if [[ -n "$GALS_CKPT" ]]; then
   CMD+=(--gals-ckpt "$GALS_CKPT")
+fi
+if [[ -n "$RISE_MASKS_PATH" ]]; then
+  CMD+=(--rise-masks-path "$RISE_MASKS_PATH")
 fi
 
 if [[ -n "${SLURM_JOB_ID:-}" ]]; then

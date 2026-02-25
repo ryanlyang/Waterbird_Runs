@@ -112,14 +112,6 @@ def open_gray_with_retry(path: Path, retries: int = 5, sleep_s: float = 0.2) -> 
     return rgw._open_pil_with_retry(str(path), mode="L", retries=retries, sleep_s=sleep_s)
 
 
-def compute_cam(features: torch.Tensor, class_weights: torch.Tensor) -> np.ndarray:
-    cam = torch.einsum("c,chw->hw", class_weights, features)
-    cam = torch.relu(cam)
-    cam = cam - cam.min()
-    cam = cam / (cam.max() + 1e-8)
-    return cam.detach().cpu().numpy().astype(np.float32)
-
-
 def resize_map(norm_map: np.ndarray, width: int, height: int) -> np.ndarray:
     return cv2.resize(norm_map, (width, height), interpolation=cv2.INTER_LINEAR)
 
@@ -174,18 +166,6 @@ def build_preprocess() -> transforms.Compose:
     )
 
 
-class VanillaFeatureHook:
-    def __init__(self, model: torch.nn.Module):
-        self.features: Optional[torch.Tensor] = None
-        self.handle = model.layer4.register_forward_hook(self._hook)  # type: ignore[attr-defined]
-
-    def _hook(self, _module, _inputs, output):
-        self.features = output.detach()
-
-    def close(self) -> None:
-        self.handle.remove()
-
-
 class GALSBinaryCAMModel(nn.Module):
     """
     Wrapper around repo ResNet with return_fmaps=True and binary (single-logit) head.
@@ -199,6 +179,139 @@ class GALSBinaryCAMModel(nn.Module):
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         logits, fmaps = self.net(x)
         return logits, fmaps
+
+
+class GuidedProbModel(nn.Module):
+    def __init__(self, model: nn.Module):
+        super().__init__()
+        self.model = model
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        logits, _ = self.model(x)
+        return torch.softmax(logits, dim=1)
+
+
+class VanillaProbModel(nn.Module):
+    def __init__(self, model: nn.Module):
+        super().__init__()
+        self.model = model
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        logits = self.model(x)
+        return torch.softmax(logits, dim=1)
+
+
+class GALSProbModel(nn.Module):
+    def __init__(self, model: GALSBinaryCAMModel):
+        super().__init__()
+        self.model = model
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        logits, _ = self.model(x)
+        prob_1 = torch.sigmoid(logits[:, 0:1])
+        prob_0 = 1.0 - prob_1
+        return torch.cat([prob_0, prob_1], dim=1)
+
+
+class RISEExplainer(nn.Module):
+    def __init__(self, prob_model: nn.Module, masks: torch.Tensor, gpu_batch: int, p1: float):
+        super().__init__()
+        self.prob_model = prob_model
+        self.masks = masks
+        self.gpu_batch = int(gpu_batch)
+        self.p1 = float(p1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        n_masks = int(self.masks.shape[0])
+        _, _, h, w = x.size()
+        stack = torch.mul(self.masks, x.data)
+
+        probs: List[torch.Tensor] = []
+        for i in range(0, n_masks, self.gpu_batch):
+            probs.append(self.prob_model(stack[i : min(i + self.gpu_batch, n_masks)]))
+        p = torch.cat(probs, dim=0)
+
+        num_classes = int(p.size(1))
+        sal = torch.matmul(p.data.transpose(0, 1), self.masks.view(n_masks, h * w))
+        sal = sal.view((num_classes, h, w))
+        sal = sal / float(n_masks) / self.p1
+        return sal
+
+
+def generate_rise_masks_array(
+    num_masks: int,
+    input_size: Tuple[int, int],
+    grid_size: int,
+    p1: float,
+    seed: int,
+) -> np.ndarray:
+    h, w = input_size
+    cell_h = int(np.ceil(float(h) / float(grid_size)))
+    cell_w = int(np.ceil(float(w) / float(grid_size)))
+    up_h = (grid_size + 1) * cell_h
+    up_w = (grid_size + 1) * cell_w
+
+    rng = np.random.default_rng(seed)
+    grid = (rng.random((num_masks, grid_size, grid_size)) < p1).astype(np.float32)
+    masks = np.empty((num_masks, 1, h, w), dtype=np.float32)
+
+    for i in range(num_masks):
+        x = int(rng.integers(0, cell_h))
+        y = int(rng.integers(0, cell_w))
+        upsampled = cv2.resize(grid[i], (up_w, up_h), interpolation=cv2.INTER_LINEAR)
+        masks[i, 0] = upsampled[x : x + h, y : y + w]
+
+    return masks
+
+
+def load_or_create_rise_masks(
+    mask_path: Path,
+    num_masks: int,
+    input_size: Tuple[int, int],
+    grid_size: int,
+    p1: float,
+    seed: int,
+    device: torch.device,
+) -> torch.Tensor:
+    expected_shape = (num_masks, 1, input_size[0], input_size[1])
+    masks_np: Optional[np.ndarray] = None
+
+    if mask_path.is_file():
+        loaded = np.load(mask_path)
+        if loaded.shape == expected_shape:
+            masks_np = loaded.astype(np.float32)
+        else:
+            print(
+                f"[WARN] Existing RISE mask file has shape {loaded.shape}, expected {expected_shape}. Regenerating.",
+                flush=True,
+            )
+
+    if masks_np is None:
+        mask_path.parent.mkdir(parents=True, exist_ok=True)
+        masks_np = generate_rise_masks_array(
+            num_masks=num_masks,
+            input_size=input_size,
+            grid_size=grid_size,
+            p1=p1,
+            seed=seed,
+        )
+        np.save(mask_path, masks_np)
+
+    return torch.from_numpy(masks_np).float().to(device)
+
+
+def build_rise_explainer(
+    prob_model: nn.Module,
+    masks: torch.Tensor,
+    input_size: Tuple[int, int],
+    num_classes: int,
+    gpu_batch: int,
+    p1: float,
+) -> RISEExplainer:
+    _ = input_size
+    _ = num_classes
+    explainer = RISEExplainer(prob_model=prob_model, masks=masks, gpu_batch=gpu_batch, p1=p1)
+    return explainer
 
 
 def extract_state_dict(ckpt_obj: object) -> Dict[str, torch.Tensor]:
@@ -549,15 +662,14 @@ def load_guided_model(guided_ckpt: Path, num_classes: int, device: torch.device)
     return model
 
 
-def load_vanilla_model(vanilla_ckpt: Path, num_classes: int, device: torch.device) -> Tuple[torch.nn.Module, VanillaFeatureHook]:
+def load_vanilla_model(vanilla_ckpt: Path, num_classes: int, device: torch.device) -> torch.nn.Module:
     model = rvw.make_model("resnet50", num_classes, pretrained=True).to(device)
     state = torch.load(vanilla_ckpt, map_location=device)
     if isinstance(state, dict) and "model_state_dict" in state:
         state = state["model_state_dict"]
     model.load_state_dict(state)
     model.eval()
-    hook = VanillaFeatureHook(model)
-    return model, hook
+    return model
 
 
 def load_gals_model(gals_ckpt: Path, device: torch.device) -> GALSBinaryCAMModel:
@@ -614,10 +726,26 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Output directory. If empty, creates timestamped folder under <dataset_parent>/logsWaterbird/.",
     )
-    p.add_argument("--num-val-samples", type=int, default=50)
+    p.add_argument("--num-val-samples", type=int, default=150)
     p.add_argument("--sample-seed", type=int, default=0)
     p.add_argument("--sample-strategy", choices=["balanced", "random"], default="balanced")
     p.add_argument("--target-class", choices=["label", "pred"], default="label")
+    p.add_argument(
+        "--saliency-method",
+        choices=["rise"],
+        default="rise",
+        help="Saliency explainer used for map generation. This script currently supports only RISE.",
+    )
+    p.add_argument("--rise-num-masks", type=int, default=2000)
+    p.add_argument("--rise-grid-size", type=int, default=8)
+    p.add_argument("--rise-p1", type=float, default=0.1)
+    p.add_argument("--rise-gpu-batch", type=int, default=16)
+    p.add_argument("--rise-seed", type=int, default=0)
+    p.add_argument(
+        "--rise-masks-path",
+        default="",
+        help="Optional .npy mask-bank path for RISE. If unset, uses <output_dir>/rise_masks_*.npy.",
+    )
 
     # Guided fixed params (WB100 defaults)
     p.add_argument("--guided-seed", type=int, default=0)
@@ -715,8 +843,55 @@ def main() -> None:
     print(f"[INFO] Using device: {device}", flush=True)
 
     guided_model = load_guided_model(guided_ckpt, num_classes, device)
-    vanilla_model, vanilla_hook = load_vanilla_model(vanilla_ckpt, num_classes, device)
+    vanilla_model = load_vanilla_model(vanilla_ckpt, num_classes, device)
     gals_model = load_gals_model(gals_ckpt, device) if gals_ckpt is not None else None
+
+    if args.saliency_method != "rise":
+        raise RuntimeError(f"Unsupported saliency method: {args.saliency_method}")
+
+    rise_input_size = (224, 224)
+    if args.rise_masks_path:
+        rise_masks_path = Path(args.rise_masks_path).expanduser().resolve()
+    else:
+        p1_token = str(args.rise_p1).replace(".", "p")
+        rise_masks_path = out_dir / f"rise_masks_n{args.rise_num_masks}_s{args.rise_grid_size}_p{p1_token}_seed{args.rise_seed}.npy"
+
+    shared_rise_masks = load_or_create_rise_masks(
+        mask_path=rise_masks_path,
+        num_masks=int(args.rise_num_masks),
+        input_size=rise_input_size,
+        grid_size=int(args.rise_grid_size),
+        p1=float(args.rise_p1),
+        seed=int(args.rise_seed),
+        device=device,
+    )
+
+    guided_rise = build_rise_explainer(
+        prob_model=GuidedProbModel(guided_model).to(device).eval(),
+        masks=shared_rise_masks,
+        input_size=rise_input_size,
+        num_classes=num_classes,
+        gpu_batch=int(args.rise_gpu_batch),
+        p1=float(args.rise_p1),
+    )
+    vanilla_rise = build_rise_explainer(
+        prob_model=VanillaProbModel(vanilla_model).to(device).eval(),
+        masks=shared_rise_masks,
+        input_size=rise_input_size,
+        num_classes=num_classes,
+        gpu_batch=int(args.rise_gpu_batch),
+        p1=float(args.rise_p1),
+    )
+    gals_rise = None
+    if gals_model is not None:
+        gals_rise = build_rise_explainer(
+            prob_model=GALSProbModel(gals_model).to(device).eval(),
+            masks=shared_rise_masks,
+            input_size=rise_input_size,
+            num_classes=2,
+            gpu_batch=int(args.rise_gpu_batch),
+            p1=float(args.rise_p1),
+        )
 
     selected = select_val_rows(
         metadata_df=metadata_df,
@@ -725,118 +900,116 @@ def main() -> None:
         strategy=args.sample_strategy,
     )
     print(f"[INFO] Selected {len(selected)} val images for saliency generation.", flush=True)
+    print(
+        (
+            "[INFO] Saliency method=RISE "
+            f"(num_masks={int(args.rise_num_masks)} grid_size={int(args.rise_grid_size)} "
+            f"p1={float(args.rise_p1)} gpu_batch={int(args.rise_gpu_batch)} seed={int(args.rise_seed)})"
+        ),
+        flush=True,
+    )
+    print(f"[INFO] RISE mask bank: {rise_masks_path}", flush=True)
 
     preprocess = build_preprocess()
     sample_rows: List[Dict[str, object]] = []
 
-    try:
-        for i, row in selected.iterrows():
-            rel_path = str(row["img_filename"])
-            img_path = data_path / rel_path
-            if not img_path.is_file():
-                print(f"[WARN] Missing image, skipping: {img_path}", flush=True)
-                continue
+    for i, row in selected.iterrows():
+        rel_path = str(row["img_filename"])
+        img_path = data_path / rel_path
+        if not img_path.is_file():
+            print(f"[WARN] Missing image, skipping: {img_path}", flush=True)
+            continue
 
-            image_pil = open_rgb_with_retry(img_path)
-            image_rgb = np.array(image_pil, dtype=np.uint8)
-            input_tensor = preprocess(image_pil).unsqueeze(0).to(device)
+        image_pil = open_rgb_with_retry(img_path)
+        image_rgb = np.array(image_pil, dtype=np.uint8)
+        input_tensor = preprocess(image_pil).unsqueeze(0).to(device)
 
-            label = int(row["y"])
-            place = int(row["place"])
-            group = int(label * 2 + place)
-            use_label_target = args.target_class == "label"
+        label = int(row["y"])
+        place = int(row["place"])
+        group = int(label * 2 + place)
+        use_label_target = args.target_class == "label"
 
-            vis_by_model: Dict[str, Dict[str, np.ndarray]] = {}
-            saliency_by_model: Dict[str, np.ndarray] = {}
-            info: Dict[str, object] = {
-                "index": int(i),
-                "img_filename": rel_path,
-                "image_path": str(img_path),
-                "label": label,
-                "place": place,
-                "group": group,
-                "group_name": GROUP_NAMES[group] if 0 <= group < len(GROUP_NAMES) else str(group),
+        vis_by_model: Dict[str, Dict[str, np.ndarray]] = {}
+        saliency_by_model: Dict[str, np.ndarray] = {}
+        info: Dict[str, object] = {
+            "index": int(i),
+            "img_filename": rel_path,
+            "image_path": str(img_path),
+            "label": label,
+            "place": place,
+            "group": group,
+            "group_name": GROUP_NAMES[group] if 0 <= group < len(GROUP_NAMES) else str(group),
+        }
+
+        with torch.no_grad():
+            # Guided
+            guided_logits, _ = guided_model(input_tensor)
+            guided_pred = int(guided_logits.argmax(dim=1).item())
+            guided_target = label if use_label_target else guided_pred
+            guided_conf = float(torch.softmax(guided_logits, dim=1)[0, guided_pred].item())
+            guided_rise_sal = guided_rise(input_tensor)
+            saliency_by_model["guided"] = guided_rise_sal[guided_target].detach().cpu().numpy().astype(np.float32)
+
+            # Vanilla
+            vanilla_logits = vanilla_model(input_tensor)
+            vanilla_pred = int(vanilla_logits.argmax(dim=1).item())
+            vanilla_target = label if use_label_target else vanilla_pred
+            vanilla_conf = float(torch.softmax(vanilla_logits, dim=1)[0, vanilla_pred].item())
+            vanilla_rise_sal = vanilla_rise(input_tensor)
+            saliency_by_model["vanilla"] = vanilla_rise_sal[vanilla_target].detach().cpu().numpy().astype(np.float32)
+
+            # GALS-ViT
+            if gals_model is not None and gals_rise is not None:
+                gals_logits, _ = gals_model(input_tensor)
+                gals_prob_1 = torch.sigmoid(gals_logits[:, 0])
+                gals_prob_0 = 1.0 - gals_prob_1
+                gals_pred = int((gals_prob_1 >= 0.5).long().item())
+                gals_conf = float(torch.maximum(gals_prob_0, gals_prob_1).item())
+                gals_target = label if use_label_target else gals_pred
+                gals_rise_sal = gals_rise(input_tensor)
+                saliency_by_model["gals_vit"] = gals_rise_sal[gals_target].detach().cpu().numpy().astype(np.float32)
+            else:
+                gals_pred = None
+                gals_conf = None
+                gals_target = None
+
+        sample_token = safe_token(rel_path)
+        sample_dir = out_dir / "samples" / f"{i:03d}_{sample_token}"
+        sample_dir.mkdir(parents=True, exist_ok=True)
+
+        save_rgb(sample_dir / "original_image.png", image_rgb)
+
+        mask_name = rgw.mask_name_from_path(str(img_path))
+        gt_mask_path = gt_root / mask_name
+        has_mask = save_gt_mask_variants(gt_mask_path, image_rgb, sample_dir)
+        if not has_mask:
+            with open(sample_dir / "gt_mask_missing.txt", "w") as f:
+                f.write(f"GT mask not found at: {gt_mask_path}\n")
+
+        # Save visualizations for each model in this sample folder.
+        for model_name, sal_map in saliency_by_model.items():
+            vis_by_model[model_name] = save_saliency_variants(model_name, sal_map, image_rgb, sample_dir)
+
+        write_comparison_panels(sample_dir, vis_by_model)
+
+        info.update(
+            {
+                "guided_pred": guided_pred,
+                "guided_confidence": guided_conf,
+                "guided_saliency_target_class": guided_target,
+                "vanilla_pred": vanilla_pred,
+                "vanilla_confidence": vanilla_conf,
+                "vanilla_saliency_target_class": vanilla_target,
+                "gals_vit_pred": gals_pred,
+                "gals_vit_confidence": gals_conf,
+                "gals_vit_saliency_target_class": gals_target,
+                "gt_mask_path": str(gt_mask_path) if has_mask else None,
             }
+        )
 
-            with torch.no_grad():
-                # Guided
-                guided_logits, guided_feats = guided_model(input_tensor)
-                guided_pred = int(guided_logits.argmax(dim=1).item())
-                guided_target = label if use_label_target else guided_pred
-                guided_weights = guided_model.classifier.weight[guided_target]  # type: ignore[attr-defined]
-                guided_cam = compute_cam(guided_feats[0], guided_weights)
-                guided_conf = float(torch.softmax(guided_logits, dim=1)[0, guided_pred].item())
-                saliency_by_model["guided"] = guided_cam
-
-                # Vanilla
-                vanilla_logits = vanilla_model(input_tensor)
-                if vanilla_hook.features is None:
-                    raise RuntimeError("Vanilla feature hook failed to capture layer4 output.")
-                vanilla_pred = int(vanilla_logits.argmax(dim=1).item())
-                vanilla_target = label if use_label_target else vanilla_pred
-                vanilla_weights = vanilla_model.fc.weight[vanilla_target]  # type: ignore[attr-defined]
-                vanilla_cam = compute_cam(vanilla_hook.features[0], vanilla_weights)
-                vanilla_conf = float(torch.softmax(vanilla_logits, dim=1)[0, vanilla_pred].item())
-                saliency_by_model["vanilla"] = vanilla_cam
-
-                # GALS-ViT
-                if gals_model is not None:
-                    gals_logits, gals_feats = gals_model(input_tensor)
-                    gals_prob_1 = torch.sigmoid(gals_logits[:, 0])
-                    gals_prob_0 = 1.0 - gals_prob_1
-                    gals_pred = int((gals_prob_1 >= 0.5).long().item())
-                    gals_conf = float(torch.maximum(gals_prob_0, gals_prob_1).item())
-                    gals_target = label if use_label_target else gals_pred
-
-                    # Binary single-logit head: class 0 logit is approximately -logit(class1).
-                    w_pos = gals_model.net.fc.weight[0]  # type: ignore[attr-defined]
-                    w_target = w_pos if gals_target == 1 else (-w_pos)
-                    gals_cam = compute_cam(gals_feats[0], w_target)
-                    saliency_by_model["gals_vit"] = gals_cam
-                else:
-                    gals_pred = None
-                    gals_conf = None
-                    gals_target = None
-
-            sample_token = safe_token(rel_path)
-            sample_dir = out_dir / "samples" / f"{i:03d}_{sample_token}"
-            sample_dir.mkdir(parents=True, exist_ok=True)
-
-            save_rgb(sample_dir / "original_image.png", image_rgb)
-
-            mask_name = rgw.mask_name_from_path(str(img_path))
-            gt_mask_path = gt_root / mask_name
-            has_mask = save_gt_mask_variants(gt_mask_path, image_rgb, sample_dir)
-            if not has_mask:
-                with open(sample_dir / "gt_mask_missing.txt", "w") as f:
-                    f.write(f"GT mask not found at: {gt_mask_path}\n")
-
-            # Save visualizations for each model in this sample folder.
-            for model_name, sal_map in saliency_by_model.items():
-                vis_by_model[model_name] = save_saliency_variants(model_name, sal_map, image_rgb, sample_dir)
-
-            write_comparison_panels(sample_dir, vis_by_model)
-
-            info.update(
-                {
-                    "guided_pred": guided_pred,
-                    "guided_confidence": guided_conf,
-                    "guided_saliency_target_class": guided_target,
-                    "vanilla_pred": vanilla_pred,
-                    "vanilla_confidence": vanilla_conf,
-                    "vanilla_saliency_target_class": vanilla_target,
-                    "gals_vit_pred": gals_pred,
-                    "gals_vit_confidence": gals_conf,
-                    "gals_vit_saliency_target_class": gals_target,
-                    "gt_mask_path": str(gt_mask_path) if has_mask else None,
-                }
-            )
-
-            with open(sample_dir / "sample_info.json", "w") as f:
-                json.dump(info, f, indent=2)
-            sample_rows.append(info)
-    finally:
-        vanilla_hook.close()
+        with open(sample_dir / "sample_info.json", "w") as f:
+            json.dump(info, f, indent=2)
+        sample_rows.append(info)
 
     summary = {
         "data_path": str(data_path),
@@ -846,6 +1019,15 @@ def main() -> None:
         "num_val_samples_generated": int(len(sample_rows)),
         "sample_strategy": args.sample_strategy,
         "target_class_mode": args.target_class,
+        "saliency_method": args.saliency_method,
+        "rise": {
+            "num_masks": int(args.rise_num_masks),
+            "grid_size": int(args.rise_grid_size),
+            "p1": float(args.rise_p1),
+            "gpu_batch": int(args.rise_gpu_batch),
+            "seed": int(args.rise_seed),
+            "masks_path": str(rise_masks_path),
+        },
         "guided": guided_metrics,
         "vanilla": vanilla_metrics,
         "gals_vit": gals_metrics,
@@ -887,9 +1069,9 @@ def main() -> None:
             "Per-sample folders are under samples/.\n"
             "Each folder contains:\n"
             "- original_image.png\n"
-            "- guided saliency variants (overlay/heatmap/grayscale/binary/contours)\n"
-            "- vanilla saliency variants (same set)\n"
-            "- gals_vit saliency variants (same set, if enabled)\n"
+            "- guided RISE saliency variants (overlay/heatmap/grayscale/binary/contours)\n"
+            "- vanilla RISE saliency variants (same set)\n"
+            "- gals_vit RISE saliency variants (same set, if enabled)\n"
             "- pair_* comparison panels for each visualization style\n"
             "- all_models_* strips for each visualization style\n"
             "- GT mask visualization variants when available\n"
