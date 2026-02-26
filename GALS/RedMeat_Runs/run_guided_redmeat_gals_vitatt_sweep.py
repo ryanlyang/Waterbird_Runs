@@ -28,6 +28,121 @@ def write_row(csv_path, row, header):
         writer.writerow(row)
 
 
+def _parse_int(v, default=None):
+    try:
+        return int(v)
+    except Exception:
+        return default
+
+
+def _parse_float(v, default=None):
+    try:
+        return float(v)
+    except Exception:
+        return default
+
+
+def load_resume_rows(csv_path, max_trials):
+    rows_by_trial = {}
+    with open(csv_path, newline="") as f:
+        reader = csv.DictReader(f)
+        for raw in reader:
+            tid = _parse_int(raw.get("trial"), default=None)
+            if tid is None or tid < 0 or tid >= int(max_trials):
+                continue
+            row = {
+                "trial": tid,
+                "attention_epoch": _parse_int(raw.get("attention_epoch"), default=None),
+                "kl_lambda": _parse_float(raw.get("kl_lambda"), default=None),
+                "kl_incr": _parse_float(raw.get("kl_incr"), default=0.0),
+                "base_lr": _parse_float(raw.get("base_lr"), default=None),
+                "classifier_lr": _parse_float(raw.get("classifier_lr"), default=None),
+                "lr2_mult": _parse_float(raw.get("lr2_mult"), default=None),
+                "best_balanced_val_acc": _parse_float(raw.get("best_balanced_val_acc"), default=None),
+                "test_acc": _parse_float(raw.get("test_acc"), default=None),
+                "per_group": _parse_float(raw.get("per_group"), default=None),
+                "worst_group": _parse_float(raw.get("worst_group"), default=None),
+                "checkpoint": raw.get("checkpoint"),
+                "sampler": raw.get("sampler", "tpe"),
+                "seconds": _parse_int(raw.get("seconds"), default=None),
+            }
+            rows_by_trial[tid] = row
+    rows = [rows_by_trial[k] for k in sorted(rows_by_trial.keys())]
+    completed = set(rows_by_trial.keys())
+    return rows, completed
+
+
+def summarize_post_rows(rows, summary_csv=None):
+    metrics = ("best_balanced_val_acc", "test_acc", "per_group", "worst_group")
+    out_rows = []
+    for metric in metrics:
+        vals = [row.get(metric) for row in rows]
+        vals = [float(v) for v in vals if v is not None]
+        if not vals:
+            continue
+        arr = np.array(vals, dtype=float)
+        out_rows.append(
+            {
+                "metric": metric,
+                "mean": float(np.mean(arr)),
+                "std": float(np.std(arr)),
+                "n": int(arr.size),
+            }
+        )
+    if out_rows:
+        print("[POST] Summary over seeds:")
+        for row in out_rows:
+            print(f"  {row['metric']}: {row['mean']:.4f} +/- {row['std']:.4f} (n={row['n']})")
+    if summary_csv:
+        header = ["metric", "mean", "std", "n"]
+        file_exists = os.path.exists(summary_csv)
+        with open(summary_csv, "a", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=header)
+            if not file_exists:
+                writer.writeheader()
+            for row in out_rows:
+                writer.writerow(row)
+    return out_rows
+
+
+def add_completed_trials_to_study(study, rows, args):
+    import optuna
+
+    dists = {
+        "attention_epoch": optuna.distributions.IntDistribution(args.attn_min, args.attn_max),
+        "kl_lambda": optuna.distributions.FloatDistribution(args.kl_min, args.kl_max, log=True),
+        "base_lr": optuna.distributions.FloatDistribution(args.base_lr_min, args.base_lr_max, log=True),
+        "classifier_lr": optuna.distributions.FloatDistribution(args.cls_lr_min, args.cls_lr_max, log=True),
+        "lr2_mult": optuna.distributions.FloatDistribution(args.lr2_mult_min, args.lr2_mult_max, log=True),
+    }
+
+    added = 0
+    for row in rows:
+        value = row.get("best_balanced_val_acc")
+        if value is None:
+            continue
+        params = {
+            "attention_epoch": row.get("attention_epoch"),
+            "kl_lambda": row.get("kl_lambda"),
+            "base_lr": row.get("base_lr"),
+            "classifier_lr": row.get("classifier_lr"),
+            "lr2_mult": row.get("lr2_mult"),
+        }
+        if any(v is None for v in params.values()):
+            continue
+        try:
+            frozen = optuna.trial.create_trial(
+                params=params,
+                distributions=dists,
+                value=float(value),
+            )
+            study.add_trial(frozen)
+            added += 1
+        except Exception as exc:
+            print(f"[RESUME] Skipping study restore for trial {row.get('trial')}: {exc}")
+    return added
+
+
 def print_runtime_summary(tag, rows, num_epochs):
     secs = [float(r["seconds"]) for r in rows if r.get("seconds") is not None]
     if not secs:
@@ -137,6 +252,11 @@ def main():
     p.add_argument("--n-trials", type=int, default=50)
     p.add_argument("--seed", type=int, default=0, help="Sweep sampler seed + trial training seed")
     p.add_argument("--output-csv", default="guided_redmeat_galsvit_sweep.csv")
+    p.add_argument(
+        "--resume-csv",
+        default=None,
+        help="Existing sweep CSV to resume from. Completed trial IDs are skipped.",
+    )
 
     p.add_argument("--attn-min", type=int, default=0)
     p.add_argument("--attn-max", type=int, default=rgm.num_epochs - 1)
@@ -153,6 +273,11 @@ def main():
     p.add_argument("--post-seeds", type=int, default=5)
     p.add_argument("--post-seed-start", type=int, default=0)
     p.add_argument("--post-output-csv", default=None)
+    p.add_argument(
+        "--post-summary-csv",
+        default=None,
+        help="Optional CSV to store mean/std summary over post-seed reruns.",
+    )
     p.add_argument("--num-epochs", type=int, default=rgm.num_epochs)
 
     args = p.parse_args()
@@ -170,6 +295,10 @@ def main():
         raise FileNotFoundError(f"Missing data_path: {args.data_path}")
     if not os.path.isdir(args.att_path):
         raise FileNotFoundError(f"Missing att_path: {args.att_path}")
+    if args.resume_csv and not os.path.isfile(args.resume_csv):
+        raise FileNotFoundError(f"Missing resume CSV: {args.resume_csv}")
+    if args.resume_csv and args.output_csv == "guided_redmeat_galsvit_sweep.csv":
+        args.output_csv = args.resume_csv
 
     header = [
         "trial",
@@ -199,9 +328,25 @@ def main():
 
     best_row = None
     sweep_rows = []
+    completed_trial_ids = set()
+
+    if args.resume_csv:
+        resume_rows, completed_trial_ids = load_resume_rows(args.resume_csv, args.n_trials)
+        sweep_rows.extend(resume_rows)
+        for row in resume_rows:
+            score = row.get("best_balanced_val_acc")
+            if score is not None and (best_row is None or score > best_row["best_balanced_val_acc"]):
+                best_row = row
+        print(
+            f"[RESUME] Loaded {len(resume_rows)} completed trials from {args.resume_csv}. "
+            f"Remaining: {max(0, args.n_trials - len(completed_trial_ids))}"
+        )
 
     if args.sampler == "random":
         for trial_id in range(args.n_trials):
+            if trial_id in completed_trial_ids:
+                print(f"[RESUME] Skipping completed trial {trial_id}")
+                continue
             row = run_trial(trial_id, args, rng, "random")
             write_row(args.output_csv, row, header)
             sweep_rows.append(row)
@@ -210,20 +355,39 @@ def main():
             print(f"[SWEEP] Trial {trial_id} done. best_balanced_val_acc={row['best_balanced_val_acc']:.4f}")
     else:
         import optuna
+        from optuna.trial import TrialState
 
-        def objective(trial):
-            nonlocal best_row
+        study = optuna.create_study(
+            direction="maximize",
+            sampler=optuna.samplers.TPESampler(seed=args.seed),
+        )
+        if args.resume_csv:
+            restored = add_completed_trials_to_study(study, sweep_rows, args)
+            print(f"[RESUME] Restored {restored} prior trials into TPE history.")
+
+        for trial_id in range(args.n_trials):
+            if trial_id in completed_trial_ids:
+                print(f"[RESUME] Skipping completed trial {trial_id}")
+                continue
+            trial = study.ask()
             args.trial = trial
-            row = run_trial(trial.number, args, rng, "tpe")
+            try:
+                row = run_trial(trial_id, args, rng, "tpe")
+            except Exception:
+                study.tell(trial, state=TrialState.FAIL)
+                raise
+            value = row.get("best_balanced_val_acc")
+            if value is None:
+                study.tell(trial, state=TrialState.FAIL)
+                raise RuntimeError(
+                    f"Trial {trial_id} returned no best_balanced_val_acc; cannot continue TPE."
+                )
             write_row(args.output_csv, row, header)
             sweep_rows.append(row)
-            if best_row is None or row["best_balanced_val_acc"] > best_row["best_balanced_val_acc"]:
+            study.tell(trial, float(value))
+            if best_row is None or value > best_row["best_balanced_val_acc"]:
                 best_row = row
-            print(f"[SWEEP] Trial {trial.number} done. best_balanced_val_acc={row['best_balanced_val_acc']:.4f}")
-            return row["best_balanced_val_acc"]
-
-        study = optuna.create_study(direction="maximize")
-        study.optimize(objective, n_trials=args.n_trials)
+            print(f"[SWEEP] Trial {trial_id} done. best_balanced_val_acc={row['best_balanced_val_acc']:.4f}")
 
     if best_row is None:
         raise RuntimeError("No successful trials completed")
@@ -305,6 +469,12 @@ def main():
                 f"test_acc={test_acc:.2f}% worst_group={worst_group:.2f}%",
                 flush=True,
             )
+
+        summary_csv = args.post_summary_csv
+        if summary_csv is None:
+            root, ext = os.path.splitext(post_csv)
+            summary_csv = f"{root}_summary{ext or '.csv'}"
+        summarize_post_rows(post_rows, summary_csv=summary_csv)
 
     print_runtime_summary("sweep", sweep_rows, rgm.num_epochs)
     if post_rows:
