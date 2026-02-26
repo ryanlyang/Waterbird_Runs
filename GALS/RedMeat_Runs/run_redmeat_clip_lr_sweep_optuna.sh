@@ -58,8 +58,8 @@ OBJECTIVE=${OBJECTIVE:-val_avg_group_acc}
 C_MIN=${C_MIN:-1e-2}
 C_MAX=${C_MAX:-1e2}
 MAX_ITER=${MAX_ITER:-5000}
-# Prefer liblinear-only defaults; lbfgs has shown sporadic native crashes on some nodes.
-PENALTY_SOLVERS=${PENALTY_SOLVERS:-l2:liblinear,l1:liblinear}
+# Prefer lbfgs-only defaults; liblinear has shown sporadic native crashes on some nodes.
+PENALTY_SOLVERS=${PENALTY_SOLVERS:-l2:lbfgs}
 POST_SEEDS=${POST_SEEDS:-5}
 POST_SEED_START=${POST_SEED_START:-0}
 

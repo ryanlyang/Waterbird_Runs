@@ -20,9 +20,9 @@ _PENALTY_SOLVER_BASE_CHOICES = [
     ("l1", "saga", None),
     ("elasticnet", "saga", "suggest"),
 ]
-# Default to a conservative, stable subset. You can still opt into lbfgs/saga
-# explicitly via --penalty-solvers.
-_PENALTY_SOLVER_SPEC_DEFAULT = "l2:liblinear,l1:liblinear"
+# Default to lbfgs-only for stability; liblinear has shown node-dependent
+# native crashes in this environment.
+_PENALTY_SOLVER_SPEC_DEFAULT = "l2:lbfgs"
 
 
 def _repo_root() -> Path:
@@ -68,6 +68,20 @@ def _print_runtime_summary(tag: str, rows: Iterable[Dict], num_epochs: Optional[
         print(f"[TIME] {tag}: median min/epoch={med_epoch_min:.4f} (epochs/trial={int(num_epochs)})")
     else:
         print(f"[TIME] {tag}: median min/epoch=N/A (no epoch notion for CLIP+LR)")
+
+
+def _print_metric_mean_std(tag: str, rows: Iterable[Dict], metric_keys: Iterable[str]) -> None:
+    rows = list(rows)
+    if not rows:
+        return
+    print(f"[{tag}] Mean/std over runs:")
+    for key in metric_keys:
+        vals = [r.get(key) for r in rows]
+        vals = [float(v) for v in vals if v is not None]
+        if not vals:
+            continue
+        arr = np.array(vals, dtype=float)
+        print(f"  {key}: {float(np.mean(arr)):.4f} +/- {float(np.std(arr)):.4f} (n={arr.size})")
 
 
 def _l2_normalize(x: np.ndarray, eps: float = 1e-12) -> np.ndarray:
@@ -693,6 +707,11 @@ def main():
                 f"(test_worst_group_acc={out_row['test_worst_group_acc']:.2f})"
             )
 
+        _print_metric_mean_std(
+            "POST",
+            post_rows,
+            ["test_acc", "test_avg_group_acc", "test_worst_group_acc", "val_acc", "val_avg_group_acc", "val_worst_group_acc"],
+        )
         _print_runtime_summary("post_best_seeds", post_rows, num_epochs=None)
 
     _print_runtime_summary("sweep", sweep_rows, num_epochs=None)
