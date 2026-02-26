@@ -47,7 +47,7 @@ SWEEP_SEED=${SWEEP_SEED:-0}
 SAMPLER=${SAMPLER:-tpe}
 POST_SEEDS=${POST_SEEDS:-5}
 POST_SEED_START=${POST_SEED_START:-0}
-OPTIM_BETA=${OPTIM_BETA:-10}
+OPTIM_BETA=${OPTIM_BETA:-1}
 
 SWEEP_OUT=${SWEEP_OUT:-$LOG_DIR/guided_redmeat_galsrn50_sweep_optimnum_${SLURM_JOB_ID}.csv}
 POST_OUT=${POST_OUT:-$LOG_DIR/guided_redmeat_galsrn50_sweep_optimnum_best5_${SLURM_JOB_ID}.csv}
