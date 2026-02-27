@@ -75,6 +75,7 @@ REG_COEFFS="${REG_COEFFS:-0,0.1,0.2,0.3,0.4}"
 STAGE1_EPOCHS="${STAGE1_EPOCHS:-50}"
 STAGE1_EVAL_FREQ="${STAGE1_EVAL_FREQ:-10}"
 STAGE1_SAVE_FREQ="${STAGE1_SAVE_FREQ:-10}"
+STAGE1_SCHEDULER="${STAGE1_SCHEDULER:-cosine_lr_scheduler}"
 STAGE2_EPOCHS="${STAGE2_EPOCHS:-500}"
 STAGE2_LR="${STAGE2_LR:-0.01}"
 
@@ -105,6 +106,7 @@ echo "FULL_PAPER_GRID=${FULL_PAPER_GRID}"
 echo "STAGE1_EPOCHS=${STAGE1_EPOCHS}"
 echo "STAGE1_EVAL_FREQ=${STAGE1_EVAL_FREQ}"
 echo "STAGE1_SAVE_FREQ=${STAGE1_SAVE_FREQ}"
+echo "STAGE1_SCHEDULER=${STAGE1_SCHEDULER}"
 echo "STAGE2_EPOCHS=${STAGE2_EPOCHS}"
 echo "STAGE2_LR=${STAGE2_LR}"
 echo "GAMMAS=${GAMMAS}"
@@ -165,6 +167,7 @@ ARGS=(
   --stage1-epochs "${STAGE1_EPOCHS}"
   --stage1-eval-freq "${STAGE1_EVAL_FREQ}"
   --stage1-save-freq "${STAGE1_SAVE_FREQ}"
+  --stage1-scheduler "${STAGE1_SCHEDULER}"
   --stage2-epochs "${STAGE2_EPOCHS}"
   --stage2-lr "${STAGE2_LR}"
   --classes "${CLASSES}"
@@ -186,4 +189,3 @@ else
 fi
 
 srun --unbuffered python -u run_afr_redmeat_repro.py "${ARGS[@]}"
-

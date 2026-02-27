@@ -460,7 +460,7 @@ def run(args: argparse.Namespace) -> None:
                 f"--num_epochs={args.stage1_epochs}",
                 "--batch_size=32",
                 "--optimizer=sgd_optimizer",
-                "--scheduler=cosine_lr_scheduler",
+                f"--scheduler={args.stage1_scheduler}",
                 "--init_lr=0.003",
                 "--weight_decay=1e-4",
             ]
@@ -604,6 +604,7 @@ def run(args: argparse.Namespace) -> None:
         f.write(f"METADATA_SOURCE: {prep_info['source_csv']}\n")
         f.write(f"Seeds: {seeds}\n")
         f.write(f"Stage1 epochs: {args.stage1_epochs}\n")
+        f.write(f"Stage1 scheduler: {args.stage1_scheduler}\n")
         f.write(f"Stage2 epochs: {args.stage2_epochs}\n")
         f.write(f"Gammas: {gammas}\n")
         f.write(f"Reg coeffs: {regs}\n")
@@ -698,6 +699,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stage1-epochs", type=int, default=50)
     parser.add_argument("--stage1-eval-freq", type=int, default=10)
     parser.add_argument("--stage1-save-freq", type=int, default=10)
+    parser.add_argument(
+        "--stage1-scheduler",
+        default="cosine_lr_scheduler",
+        help="AFR stage-1 scheduler passed to train_supervised.py",
+    )
     parser.add_argument("--stage2-epochs", type=int, default=500)
     parser.add_argument("--stage2-lr", type=float, default=1e-2)
 
@@ -738,4 +744,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
