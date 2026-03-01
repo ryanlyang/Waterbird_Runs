@@ -120,12 +120,20 @@ def _extract_stage2_stats(metrics_path: Path) -> Dict[str, float]:
     best_test_wga = _metric_max(m, "best_test_wga")
     best_val_mean = _metric_max(m, "best_val_mean")
     best_test_mean = _metric_max(m, "best_test_mean")
+    # AFR logs use "best_test_mean_val" in run output text ("Best test mean val").
+    # Keep robust fallbacks for potential key variants.
+    best_test_mean_at_val = _metric_max(m, "best_test_mean_val")
+    if best_test_mean_at_val is None:
+        best_test_mean_at_val = _metric_max(m, "best_test_mean_at_val")
+    if best_test_mean_at_val is None:
+        best_test_mean_at_val = best_test_mean
     return {
         "best_val_wga": _float_or_nan(best_val_wga),
         "best_test_at_val": _float_or_nan(best_test_at_val),
         "best_test_wga": _float_or_nan(best_test_wga),
         "best_val_mean": _float_or_nan(best_val_mean),
         "best_test_mean": _float_or_nan(best_test_mean),
+        "best_test_mean_at_val": _float_or_nan(best_test_mean_at_val),
     }
 
 
@@ -562,6 +570,7 @@ def run(args: argparse.Namespace) -> None:
             "best_test_wga",
             "best_val_mean",
             "best_test_mean",
+            "best_test_mean_at_val",
             "stage1_dir",
             "stage2_dir",
             "metrics_path",
@@ -579,6 +588,7 @@ def run(args: argparse.Namespace) -> None:
             "best_test_wga",
             "best_val_mean",
             "best_test_mean",
+            "best_test_mean_at_val",
             "stage1_dir",
             "stage2_dir",
             "metrics_path",
@@ -594,6 +604,22 @@ def run(args: argparse.Namespace) -> None:
     else:
         mean_best = float("nan")
         std_best = float("nan")
+
+    best_test_mean_at_val_vals = [
+        float(r["best_test_mean_at_val"])
+        for r in best_rows
+        if math.isfinite(float(r["best_test_mean_at_val"]))
+    ]
+    if best_test_mean_at_val_vals:
+        mean_best_test_mean_at_val = statistics.mean(best_test_mean_at_val_vals)
+        std_best_test_mean_at_val = (
+            statistics.pstdev(best_test_mean_at_val_vals)
+            if len(best_test_mean_at_val_vals) > 1
+            else 0.0
+        )
+    else:
+        mean_best_test_mean_at_val = float("nan")
+        std_best_test_mean_at_val = float("nan")
 
     summary_txt = output_root / "afr_redmeat_summary.txt"
     with summary_txt.open("w", encoding="utf-8") as f:
@@ -615,6 +641,8 @@ def run(args: argparse.Namespace) -> None:
         f.write(f"Place counts: {prep_info['place_counts']}\n")
         for note in prep_info.get("notes", []):
             f.write(f"Note: {note}\n")
+        f.write(f"Mean best test@val mean_acc: {mean_best_test_mean_at_val:.4f}\n")
+        f.write(f"Std best test@val mean_acc: {std_best_test_mean_at_val:.4f}\n")
         f.write(f"Mean best test@val WGA: {mean_best:.4f}\n")
         f.write(f"Std best test@val WGA: {std_best:.4f}\n")
         f.write(f"Best-per-seed CSV: {best_csv}\n")
@@ -624,6 +652,10 @@ def run(args: argparse.Namespace) -> None:
     print(f"All stage-2 results: {stage2_csv}")
     print(f"Best by seed:        {best_csv}")
     print(f"Summary:             {summary_txt}")
+    print(
+        f"Mean best test@val mean_acc across seeds: "
+        f"{mean_best_test_mean_at_val:.4f} +/- {std_best_test_mean_at_val:.4f}"
+    )
     print(f"Mean best test@val WGA across seeds: {mean_best:.4f} +/- {std_best:.4f}")
 
 
