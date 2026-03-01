@@ -13,7 +13,7 @@
 #SBATCH --gres=gpu:a100:1
 #SBATCH --time=4-00:00:00
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=32
+#SBATCH --cpus-per-task=16
 #SBATCH --mem=32G
 #SBATCH --output=/home/ryreu/guided_cnn/logsRedMeat/guided_redmeat_cliprn50_guidedprobe_sweep_%j.out
 #SBATCH --error=/home/ryreu/guided_cnn/logsRedMeat/guided_redmeat_cliprn50_guidedprobe_sweep_%j.err
