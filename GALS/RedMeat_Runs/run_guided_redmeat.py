@@ -120,6 +120,44 @@ def make_redmeat_cam_model(
     raise ValueError(f"Unsupported model_name: {model_name}")
 
 
+def configure_tune_mode(model: nn.Module, tune_mode: str) -> None:
+    """
+    Configure trainable parameters for CLIP-guided variants.
+    - full: train everything
+    - layer4_head: train only layer4 + classifier
+    - linear_probe: train classifier only (CLIP visual frozen)
+    """
+    mode = str(tune_mode).strip().lower()
+    if mode == "full":
+        for p in model.parameters():
+            p.requires_grad = True
+        return
+
+    for p in model.parameters():
+        p.requires_grad = False
+
+    if not hasattr(model, "classifier"):
+        raise AttributeError(f"Model does not expose `.classifier`; cannot apply tune_mode={mode}")
+    for p in model.classifier.parameters():
+        p.requires_grad = True
+
+    if mode == "linear_probe":
+        return
+
+    if mode == "layer4_head":
+        if not hasattr(model, "layer4"):
+            raise AttributeError(f"Model does not expose `.layer4`; cannot apply tune_mode={mode}")
+        for p in model.layer4.parameters():
+            p.requires_grad = True
+        return
+
+    raise ValueError(f"Unsupported tune_mode: {tune_mode}")
+
+
+def _count_trainable_params(model: nn.Module) -> int:
+    return int(sum(p.numel() for p in model.parameters() if p.requires_grad))
+
+
 def _resolve_img_path(data_root: str, rel_or_abs: str) -> str:
     if os.path.isabs(rel_or_abs):
         return rel_or_abs
@@ -299,6 +337,7 @@ def run_single(args, attn_epoch, kl_value, kl_increment=None):
     model_name = str(getattr(args, "model_name", "resnet50"))
     pretrained = bool(getattr(args, "pretrained", True))
     clip_model = str(getattr(args, "clip_model", "RN50"))
+    tune_mode = str(getattr(args, "tune_mode", "full"))
 
     if model_name == "clip_rn50":
         # OpenAI CLIP image normalization.
@@ -413,6 +452,12 @@ def run_single(args, attn_epoch, kl_value, kl_increment=None):
         pretrained=pretrained,
         clip_model=clip_model,
     ).to(device)
+    configure_tune_mode(model, tune_mode=tune_mode)
+    print(
+        f"[MODEL] model_name={model_name} clip_model={clip_model} pretrained={pretrained} "
+        f"tune_mode={tune_mode} trainable_params={_count_trainable_params(model):,}",
+        flush=True,
+    )
 
     save_checkpoints = os.environ.get("SAVE_CHECKPOINTS", "1").lower() not in ("0", "false", "no", "n")
     if save_checkpoints:
@@ -454,7 +499,7 @@ def run_single(args, attn_epoch, kl_value, kl_increment=None):
         print("[RUN DONE] Checkpoint saving disabled via SAVE_CHECKPOINTS=0", flush=True)
 
     print(
-        f"[RUN DONE] kl={kl_value} attn={attn_epoch} lr2_mult={lr2_mult} kl_incr={kl_increment} "
+        f"[RUN DONE] tune_mode={tune_mode} kl={kl_value} attn={attn_epoch} lr2_mult={lr2_mult} kl_incr={kl_increment} "
         f"| best_balanced_val_acc={best_score:.4f} | test_acc={test_acc:.2f}% | saved: {save_path}",
         flush=True,
     )
@@ -479,6 +524,7 @@ def main():
     p.add_argument("--checkpoint-dir", default=checkpoint_dir)
     p.add_argument("--model-name", choices=["resnet50", "clip_rn50"], default="resnet50")
     p.add_argument("--clip-model", default="RN50", help="CLIP visual model name when --model-name clip_rn50.")
+    p.add_argument("--tune-mode", choices=["full", "layer4_head", "linear_probe"], default="full")
     p.add_argument("--pretrained", action="store_true", default=True)
     p.add_argument("--no-pretrained", action="store_false", dest="pretrained")
 
@@ -511,6 +557,7 @@ def main():
         classes=classes,
         model_name=args.model_name,
         clip_model=args.clip_model,
+        tune_mode=args.tune_mode,
         pretrained=args.pretrained,
     )
     run_single(run_args, int(args.attention_epoch), float(args.kl_lambda), args.kl_increment)
