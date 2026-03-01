@@ -62,17 +62,17 @@ GUIDED_CLIP_MODEL=${GUIDED_CLIP_MODEL:-RN50}
 GUIDED_PRETRAINED=${GUIDED_PRETRAINED:-1}
 TUNE_MODE=${TUNE_MODE:-layer4_head}
 
-# CLIP-safe sweep ranges
-ATTN_MIN=${ATTN_MIN:-5}
-ATTN_MAX=${ATTN_MAX:-60}
-KL_MIN=${KL_MIN:-0.05}
-KL_MAX=${KL_MAX:-20.0}
-BASE_LR_MIN=${BASE_LR_MIN:-1e-6}
-BASE_LR_MAX=${BASE_LR_MAX:-3e-4}
+# Use the same default sweep ranges as regular guided redmeat.
+ATTN_MIN=${ATTN_MIN:-0}
+ATTN_MAX=${ATTN_MAX:-$((NUM_EPOCHS - 1))}
+KL_MIN=${KL_MIN:-1.0}
+KL_MAX=${KL_MAX:-500.0}
+BASE_LR_MIN=${BASE_LR_MIN:-1e-5}
+BASE_LR_MAX=${BASE_LR_MAX:-5e-2}
 CLS_LR_MIN=${CLS_LR_MIN:-1e-5}
-CLS_LR_MAX=${CLS_LR_MAX:-1e-3}
-LR2_MULT_MIN=${LR2_MULT_MIN:-0.05}
-LR2_MULT_MAX=${LR2_MULT_MAX:-0.5}
+CLS_LR_MAX=${CLS_LR_MAX:-5e-2}
+LR2_MULT_MIN=${LR2_MULT_MIN:-0.1}
+LR2_MULT_MAX=${LR2_MULT_MAX:-3.0}
 
 SWEEP_OUT=${SWEEP_OUT:-$LOG_DIR/guided_redmeat_cliprn50_guidedprobe_sweep_${SLURM_JOB_ID}.csv}
 POST_OUT=${POST_OUT:-$LOG_DIR/guided_redmeat_cliprn50_guidedprobe_best5_${SLURM_JOB_ID}.csv}
@@ -140,4 +140,3 @@ srun --unbuffered python -u RedMeat_Runs/run_guided_redmeat_sweep.py \
   --post-output-csv "$POST_OUT" \
   --post-summary-csv "$POST_SUMMARY_OUT" \
   "${MODEL_ARGS[@]}"
-
