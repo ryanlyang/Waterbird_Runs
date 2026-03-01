@@ -53,6 +53,9 @@ def load_resume_rows(csv_path, max_trials):
             row = {
                 "trial": tid,
                 "gt_path": raw.get("gt_path"),
+                "model_name": raw.get("model_name", "resnet50"),
+                "clip_model": raw.get("clip_model", "RN50"),
+                "pretrained": raw.get("pretrained", "1"),
                 "attention_epoch": _parse_int(raw.get("attention_epoch"), default=None),
                 "kl_lambda": _parse_float(raw.get("kl_lambda"), default=None),
                 "kl_incr": _parse_float(raw.get("kl_incr"), default=0.0),
@@ -187,6 +190,9 @@ def _run_single_with_params(args, seed, gt_path, attn_epoch, kl_lambda, kl_incr,
         label_col=args.label_col,
         path_col=args.path_col,
         classes=args.class_list,
+        model_name=args.model_name,
+        clip_model=args.clip_model,
+        pretrained=args.pretrained,
     )
     return rgm.run_single(run_args, int(attn_epoch), float(kl_lambda), float(kl_incr))
 
@@ -223,6 +229,9 @@ def run_trial(trial_id, args, rng, sampler_name):
     row = {
         "trial": trial_id,
         "gt_path": args.gt_path,
+        "model_name": args.model_name,
+        "clip_model": args.clip_model,
+        "pretrained": int(bool(args.pretrained)),
         "attention_epoch": attn_epoch,
         "kl_lambda": kl_lambda,
         "kl_incr": kl_incr,
@@ -274,6 +283,10 @@ def main():
     p.add_argument("--lr2-mult-min", type=float, default=1e-1)
     p.add_argument("--lr2-mult-max", type=float, default=3.0)
     p.add_argument("--sampler", choices=["tpe", "random"], default="tpe")
+    p.add_argument("--model-name", choices=["resnet50", "clip_rn50"], default="resnet50")
+    p.add_argument("--clip-model", default="RN50", help="Used when --model-name clip_rn50.")
+    p.add_argument("--pretrained", action="store_true", default=True)
+    p.add_argument("--no-pretrained", action="store_false", dest="pretrained")
 
     p.add_argument("--post-seeds", type=int, default=5)
     p.add_argument("--post-seed-start", type=int, default=0)
@@ -314,6 +327,9 @@ def main():
     header = [
         "trial",
         "gt_path",
+        "model_name",
+        "clip_model",
+        "pretrained",
         "attention_epoch",
         "kl_lambda",
         "kl_incr",
@@ -419,6 +435,9 @@ def main():
             "phase",
             "seed",
             "gt_path",
+            "model_name",
+            "clip_model",
+            "pretrained",
             "attention_epoch",
             "kl_lambda",
             "kl_incr",
@@ -470,6 +489,9 @@ def main():
                     "phase": phase,
                     "seed": s,
                     "gt_path": gt_root,
+                    "model_name": args.model_name,
+                    "clip_model": args.clip_model,
+                    "pretrained": int(bool(args.pretrained)),
                     "attention_epoch": best_attn_epoch,
                     "kl_lambda": best_kl_lambda,
                     "kl_incr": best_kl_incr,

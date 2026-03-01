@@ -62,6 +62,9 @@ ADDITIONAL_TRIALS=${ADDITIONAL_TRIALS:-100}
 SWEEP_SEED=${SWEEP_SEED:-0}
 SAMPLER=${SAMPLER:-tpe}
 NUM_EPOCHS=${NUM_EPOCHS:-150}
+GUIDED_MODEL_NAME=${GUIDED_MODEL_NAME:-resnet50}
+GUIDED_CLIP_MODEL=${GUIDED_CLIP_MODEL:-RN50}
+GUIDED_PRETRAINED=${GUIDED_PRETRAINED:-1}
 
 # Speed-oriented default: skip post-seed reruns during this continuation job.
 POST_SEEDS=${POST_SEEDS:-0}
@@ -145,6 +148,7 @@ echo "Next trial id: $NEXT_TRIAL"
 echo "Additional trials requested: $ADDITIONAL_TRIALS"
 echo "Total n-trials target: $N_TRIALS"
 echo "Sampler: $SAMPLER (seed=$SWEEP_SEED)"
+echo "Guided backbone: $GUIDED_MODEL_NAME (clip_model=$GUIDED_CLIP_MODEL pretrained=$GUIDED_PRETRAINED)"
 echo "Epochs per trial: $NUM_EPOCHS"
 echo "CPUs: ${SLURM_CPUS_PER_TASK:-4}  Mem: 32G"
 echo "Output CSV: $SWEEP_OUT"
@@ -152,6 +156,13 @@ echo "Post seeds: $POST_SEEDS (start=$POST_SEED_START)"
 echo "Post output CSV: $POST_OUT"
 echo "Post summary CSV: $POST_SUMMARY_OUT"
 which python
+
+MODEL_ARGS=(--model-name "$GUIDED_MODEL_NAME" --clip-model "$GUIDED_CLIP_MODEL")
+if [[ "$GUIDED_PRETRAINED" -eq 1 ]]; then
+  MODEL_ARGS+=(--pretrained)
+else
+  MODEL_ARGS+=(--no-pretrained)
+fi
 
 srun --unbuffered python -u RedMeat_Runs/run_guided_redmeat_sweep.py \
   "$DATASET_ROOT" \
@@ -166,4 +177,5 @@ srun --unbuffered python -u RedMeat_Runs/run_guided_redmeat_sweep.py \
   --post-seed-start "$POST_SEED_START" \
   --post-output-csv "$POST_OUT" \
   --post-summary-csv "$POST_SUMMARY_OUT" \
+  "${MODEL_ARGS[@]}" \
   "${ALT_ARGS[@]}"

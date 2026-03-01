@@ -62,6 +62,9 @@ SWEEP_SEED=${SWEEP_SEED:-0}
 SAMPLER=${SAMPLER:-tpe}
 POST_SEEDS=${POST_SEEDS:-5}
 POST_SEED_START=${POST_SEED_START:-0}
+GUIDED_MODEL_NAME=${GUIDED_MODEL_NAME:-resnet50}
+GUIDED_CLIP_MODEL=${GUIDED_CLIP_MODEL:-RN50}
+GUIDED_PRETRAINED=${GUIDED_PRETRAINED:-1}
 
 # Resume in place by default.
 SWEEP_OUT=${SWEEP_OUT:-$RESUME_CSV}
@@ -104,11 +107,19 @@ echo "Data: $DATASET_ROOT"
 echo "Primary GT masks: $PRIMARY_GT_ROOT"
 echo "Resume CSV: $RESUME_CSV"
 echo "Trials target: $N_TRIALS"
+echo "Guided backbone: $GUIDED_MODEL_NAME (clip_model=$GUIDED_CLIP_MODEL pretrained=$GUIDED_PRETRAINED)"
 echo "Output CSV: $SWEEP_OUT"
 echo "Post seeds: $POST_SEEDS (start=$POST_SEED_START)"
 echo "Post output CSV: $POST_OUT"
 echo "Post summary CSV: $POST_SUMMARY_OUT"
 which python
+
+MODEL_ARGS=(--model-name "$GUIDED_MODEL_NAME" --clip-model "$GUIDED_CLIP_MODEL")
+if [[ "$GUIDED_PRETRAINED" -eq 1 ]]; then
+  MODEL_ARGS+=(--pretrained)
+else
+  MODEL_ARGS+=(--no-pretrained)
+fi
 
 srun --unbuffered python -u RedMeat_Runs/run_guided_redmeat_sweep.py \
   "$DATASET_ROOT" \
@@ -123,4 +134,5 @@ srun --unbuffered python -u RedMeat_Runs/run_guided_redmeat_sweep.py \
   --post-seed-start "$POST_SEED_START" \
   --post-output-csv "$POST_OUT" \
   --post-summary-csv "$POST_SUMMARY_OUT" \
+  "${MODEL_ARGS[@]}" \
   "${ALT_ARGS[@]}"

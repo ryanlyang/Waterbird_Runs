@@ -7,6 +7,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Tuple
 
 import numpy as np
 import pandas as pd
@@ -36,6 +37,87 @@ weight_decay = 1e-5
 checkpoint_dir = "RedMeat_Guided_Checkpoints"
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 SEED = 0
+
+
+def _gals_repo_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def _try_import_clip():
+    try:
+        import clip  # type: ignore
+        return clip
+    except Exception:
+        repo_root = str(_gals_repo_root())
+        if repo_root not in sys.path:
+            sys.path.insert(0, repo_root)
+        from CLIP.clip import clip  # type: ignore
+        return clip
+
+
+class CLIPRN50CAM(nn.Module):
+    """CLIP RN50 visual backbone + GAP classifier head for CAM-style supervision."""
+
+    def __init__(self, num_classes: int, clip_model_name: str = "RN50", pretrained: bool = True):
+        super().__init__()
+        if clip_model_name != "RN50":
+            raise ValueError(f"CLIPRN50CAM currently supports clip_model_name='RN50' only, got: {clip_model_name}")
+        if not pretrained:
+            raise ValueError("CLIPRN50CAM requires pretrained=True (random-init CLIP RN50 is unsupported).")
+
+        clip_lib = _try_import_clip()
+        clip_model, _ = clip_lib.load(clip_model_name, device="cpu", jit=False)
+        clip_model = clip_model.float()
+        visual = clip_model.visual
+
+        self.conv1 = visual.conv1
+        self.bn1 = visual.bn1
+        self.conv2 = visual.conv2
+        self.bn2 = visual.bn2
+        self.conv3 = visual.conv3
+        self.bn3 = visual.bn3
+        self.avgpool = visual.avgpool
+        self.relu = visual.relu
+        self.layer1 = visual.layer1
+        self.layer2 = visual.layer2
+        self.layer3 = visual.layer3
+        self.layer4 = visual.layer4
+
+        feat_dim = int(self.layer4[-1].bn3.num_features)
+        self.gap = nn.AdaptiveAvgPool2d((1, 1))
+        self.classifier = nn.Linear(feat_dim, num_classes)
+        self.features = None
+
+    def _stem(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.relu(self.bn1(self.conv1(x)))
+        x = self.relu(self.bn2(self.conv2(x)))
+        x = self.relu(self.bn3(self.conv3(x)))
+        x = self.avgpool(x)
+        return x
+
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        x = x.to(dtype=self.conv1.weight.dtype)
+        x = self._stem(x)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        feats = self.layer4(x)
+        self.features = feats
+        logits = self.classifier(self.gap(feats).flatten(1))
+        return logits, feats
+
+
+def make_redmeat_cam_model(
+    num_classes: int,
+    model_name: str = "resnet50",
+    pretrained: bool = True,
+    clip_model: str = "RN50",
+):
+    if model_name == "resnet50":
+        return base.make_cam_model(num_classes, model_name="resnet50", pretrained=pretrained)
+    if model_name == "clip_rn50":
+        return CLIPRN50CAM(num_classes=num_classes, clip_model_name=clip_model, pretrained=pretrained)
+    raise ValueError(f"Unsupported model_name: {model_name}")
 
 
 def _resolve_img_path(data_root: str, rel_or_abs: str) -> str:
@@ -214,8 +296,17 @@ def run_single(args, attn_epoch, kl_value, kl_increment=None):
 
     use_attention = attn_epoch < num_epochs and kl_value > 0
 
-    mean = [0.485, 0.456, 0.406]
-    std = [0.229, 0.224, 0.225]
+    model_name = str(getattr(args, "model_name", "resnet50"))
+    pretrained = bool(getattr(args, "pretrained", True))
+    clip_model = str(getattr(args, "clip_model", "RN50"))
+
+    if model_name == "clip_rn50":
+        # OpenAI CLIP image normalization.
+        mean = [0.48145466, 0.4578275, 0.40821073]
+        std = [0.26862954, 0.26130258, 0.27577711]
+    else:
+        mean = [0.485, 0.456, 0.406]
+        std = [0.229, 0.224, 0.225]
     data_transforms = {
         "train": transforms.Compose(
             [
@@ -316,7 +407,12 @@ def run_single(args, attn_epoch, kl_value, kl_increment=None):
         generator=g,
     )
 
-    model = base.make_cam_model(num_classes, model_name="resnet50", pretrained=True).to(device)
+    model = make_redmeat_cam_model(
+        num_classes=num_classes,
+        model_name=model_name,
+        pretrained=pretrained,
+        clip_model=clip_model,
+    ).to(device)
 
     save_checkpoints = os.environ.get("SAVE_CHECKPOINTS", "1").lower() not in ("0", "false", "no", "n")
     if save_checkpoints:
@@ -350,7 +446,7 @@ def run_single(args, attn_epoch, kl_value, kl_increment=None):
 
     if save_checkpoints:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        save_name = f"resnet50_redmeat_final_kl{int(kl_value)}_attn{attn_epoch}_{ts}.pth"
+        save_name = f"{model_name}_redmeat_final_kl{int(kl_value)}_attn{attn_epoch}_{ts}.pth"
         save_path = os.path.join(checkpoint_dir, save_name)
         torch.save(best_model.state_dict(), save_path)
     else:
@@ -381,6 +477,10 @@ def main():
     p.add_argument("--lr2-mult", type=float, default=lr2_mult)
     p.add_argument("--num-epochs", type=int, default=num_epochs)
     p.add_argument("--checkpoint-dir", default=checkpoint_dir)
+    p.add_argument("--model-name", choices=["resnet50", "clip_rn50"], default="resnet50")
+    p.add_argument("--clip-model", default="RN50", help="CLIP visual model name when --model-name clip_rn50.")
+    p.add_argument("--pretrained", action="store_true", default=True)
+    p.add_argument("--no-pretrained", action="store_false", dest="pretrained")
 
     p.add_argument("--split-col", default="split")
     p.add_argument("--label-col", default="label")
@@ -409,6 +509,9 @@ def main():
         label_col=args.label_col,
         path_col=args.path_col,
         classes=classes,
+        model_name=args.model_name,
+        clip_model=args.clip_model,
+        pretrained=args.pretrained,
     )
     run_single(run_args, int(args.attention_epoch), float(args.kl_lambda), args.kl_increment)
 
