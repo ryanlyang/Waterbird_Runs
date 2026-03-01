@@ -19,6 +19,7 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+SUBMIT_DIR="${SLURM_SUBMIT_DIR:-${SBATCH_SUBMIT_DIR:-${PWD:-}}}"
 
 # Force RN50 backbone for CLIP feature extraction.
 export CLIP_MODEL=RN50
@@ -27,5 +28,25 @@ export CLIP_MODEL=RN50
 export OUT_CSV="${OUT_CSV:-/home/ryreu/guided_cnn/logsRedMeat/redmeat_clip_lr_rn50_sweep_${SLURM_JOB_ID}.csv}"
 export POST_OUT_CSV="${POST_OUT_CSV:-/home/ryreu/guided_cnn/logsRedMeat/redmeat_clip_lr_rn50_best5_${SLURM_JOB_ID}.csv}"
 
-exec bash "${SCRIPT_DIR}/run_redmeat_clip_lr_sweep_optuna.sh"
+BASE_SCRIPT_CANDIDATES=(
+  "${SCRIPT_DIR}/run_redmeat_clip_lr_sweep_optuna.sh"
+  "${SUBMIT_DIR}/RedMeat_Runs/run_redmeat_clip_lr_sweep_optuna.sh"
+  "/home/ryreu/guided_cnn/waterbirds/Waterbird_Runs/GALS/RedMeat_Runs/run_redmeat_clip_lr_sweep_optuna.sh"
+  "/home/ryreu/guided_cnn/Food101/Waterbird_Runs/GALS/RedMeat_Runs/run_redmeat_clip_lr_sweep_optuna.sh"
+)
+BASE_SCRIPT=""
+for candidate in "${BASE_SCRIPT_CANDIDATES[@]}"; do
+  if [[ -n "$candidate" && -f "$candidate" ]]; then
+    BASE_SCRIPT="$candidate"
+    break
+  fi
+done
 
+if [[ -z "$BASE_SCRIPT" ]]; then
+  echo "[ERROR] Could not locate run_redmeat_clip_lr_sweep_optuna.sh" >&2
+  echo "Checked: ${BASE_SCRIPT_CANDIDATES[*]}" >&2
+  exit 2
+fi
+
+echo "[RN50 wrapper] Base script: $BASE_SCRIPT"
+exec bash "$BASE_SCRIPT"
