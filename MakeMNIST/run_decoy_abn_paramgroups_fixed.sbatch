@@ -17,9 +17,11 @@ CONDA_ENV="learntolook"
 LOG_DIR="/home/ryreu/guided_cnn/logsMNIST"
 DATA_PATH="${REPO_ROOT}/data/DecoyMNIST_png"
 
-# Fixed hyperparameters from your trial.
-BASE_LR=0.027933817440579763
-CLASSIFIER_LR=0.0008096689727354128
+# CDEP-style optimizer defaults.
+LR=0.001
+WEIGHT_DECAY=1e-4
+
+# Keep ABN-specific behavior.
 ABN_CLS_WEIGHT=3.2547104257357056
 
 mkdir -p "${LOG_DIR}"
@@ -41,7 +43,7 @@ python -u mnist/run_decoy_abn_paramgroups_fixed.py \
   --png-root "${DATA_PATH}" \
   --epochs 19 \
   --n-seeds 5 \
-  --base-lr "${BASE_LR}" \
-  --classifier-lr "${CLASSIFIER_LR}" \
+  --lr "${LR}" \
+  --weight-decay "${WEIGHT_DECAY}" \
   --abn-cls-weight "${ABN_CLS_WEIGHT}" \
   --num-workers "${SLURM_CPUS_PER_TASK:-1}"

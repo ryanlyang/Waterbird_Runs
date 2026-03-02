@@ -17,9 +17,9 @@ CONDA_ENV="learntolook"
 LOG_DIR="/home/ryreu/guided_cnn/logsMNIST"
 DATA_PATH="${REPO_ROOT}/data/DecoyMNIST_png"
 
-# Fixed hyperparameters from your trial.
-BASE_LR=0.029039631505422818
-CLASSIFIER_LR=9.11321114874417e-05
+# CDEP-style optimizer defaults.
+LR=0.001
+WEIGHT_DECAY=1e-4
 
 mkdir -p "${LOG_DIR}"
 
@@ -40,6 +40,6 @@ python -u mnist/run_decoy_upweight_paramgroups_fixed.py \
   --png-root "${DATA_PATH}" \
   --epochs 19 \
   --n-seeds 5 \
-  --base-lr "${BASE_LR}" \
-  --classifier-lr "${CLASSIFIER_LR}" \
+  --lr "${LR}" \
+  --weight-decay "${WEIGHT_DECAY}" \
   --num-workers "${SLURM_CPUS_PER_TASK:-1}"

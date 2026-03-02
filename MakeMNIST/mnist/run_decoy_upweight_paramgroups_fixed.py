@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Upweight DecoyMNIST CNN with two LR parameter groups and fixed hyperparameters.
+"""Upweight DecoyMNIST CNN with CDEP-style optimizer/split setup.
 
-Runs N seeds and reports mean/std of:
-- best validation accuracy
-- test accuracy at the best-validation checkpoint
+Keeps upweight functionality (class-weighted per-sample NLL), but aligns
+optimizer/split behavior with cdepstyle vanilla:
+- Adam optimizer
+- single learning rate
+- fixed 90/10 train/val split using split seed 0 (same split across seeds)
 """
 
 from __future__ import print_function
@@ -49,20 +51,6 @@ def set_seed(seed):
     torch.cuda.manual_seed(seed)
 
 
-def get_param_groups(model, base_lr, classifier_lr):
-    base_params = []
-    classifier_params = []
-    for name, p in model.named_parameters():
-        if name.startswith("fc2.") or ".fc2." in name:
-            classifier_params.append(p)
-        else:
-            base_params.append(p)
-    return [
-        {"params": base_params, "lr": base_lr},
-        {"params": classifier_params, "lr": classifier_lr},
-    ]
-
-
 def compute_class_weights(full_train, train_subset, num_classes=10):
     idxs = train_subset.indices
     labels = np.asarray([full_train.samples[i][1] for i in idxs], dtype=np.int64)
@@ -93,12 +81,13 @@ def evaluate(model, loader, device):
 
 def train_one_seed(args, seed, full_train, test_dataset, device, loader_kwargs):
     set_seed(seed)
-    g = torch.Generator().manual_seed(seed)
 
+    # Keep split deterministic/fixed across seeds (CDEP-style behavior).
+    split_g = torch.Generator().manual_seed(0)
     n_total = len(full_train)
-    n_val = max(1, int(args.val_frac * n_total))
+    n_val = int(args.val_frac * n_total)
     n_train = n_total - n_val
-    train_subset, val_subset = utils.random_split(full_train, [n_train, n_val], generator=g)
+    train_subset, val_subset = utils.random_split(full_train, [n_train, n_val], generator=split_g)
 
     train_loader = utils.DataLoader(
         train_subset, batch_size=args.batch_size, shuffle=True, **loader_kwargs
@@ -113,13 +102,10 @@ def train_one_seed(args, seed, full_train, test_dataset, device, loader_kwargs):
     class_weights = compute_class_weights(full_train, train_subset, num_classes=10).to(device)
 
     model = Net().to(device)
-    optimizer = optim.SGD(
-        get_param_groups(model, args.base_lr, args.classifier_lr),
-        momentum=args.momentum,
-        weight_decay=args.weight_decay,
-    )
+    optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     best_val_acc = -1.0
+    best_val_loss = float("inf")
     best_weights = None
     best_epoch = -1
 
@@ -136,14 +122,19 @@ def train_one_seed(args, seed, full_train, test_dataset, device, loader_kwargs):
             loss.backward()
             optimizer.step()
 
-        _, val_acc = evaluate(model, val_loader, device)
-        if val_acc > best_val_acc:
+        val_loss, val_acc = evaluate(model, val_loader, device)
+        improved = (val_acc > best_val_acc) or (val_acc == best_val_acc and val_loss < best_val_loss)
+        if improved:
             best_val_acc = val_acc
+            best_val_loss = val_loss
             best_epoch = epoch
             best_weights = deepcopy(model.state_dict())
 
         if args.print_every > 0 and (epoch % args.print_every == 0 or epoch == args.epochs):
-            print(f"seed={seed} epoch={epoch}/{args.epochs} val_acc={val_acc:.2f}%")
+            print(
+                f"seed={seed} epoch={epoch}/{args.epochs} "
+                f"val_loss={val_loss:.4f} val_acc={val_acc:.2f}%"
+            )
 
     model.load_state_dict(best_weights)
     _, test_acc = evaluate(model, test_loader, device)
@@ -151,16 +142,14 @@ def train_one_seed(args, seed, full_train, test_dataset, device, loader_kwargs):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Upweight DecoyMNIST CNN with base/classifier LR groups")
+    parser = argparse.ArgumentParser(description="Upweight DecoyMNIST CNN with CDEP-style optimizer/split")
     parser.add_argument("--png-root", type=str, default=None)
     parser.add_argument("--epochs", type=int, default=19)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--test-batch-size", type=int, default=1000)
-    parser.add_argument("--val-frac", type=float, default=0.16)
+    parser.add_argument("--val-frac", type=float, default=0.10)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
-    parser.add_argument("--base-lr", type=float, default=0.029039631505422818)
-    parser.add_argument("--classifier-lr", type=float, default=9.11321114874417e-05)
-    parser.add_argument("--momentum", type=float, default=0.8914661939990524)
+    parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--n-seeds", type=int, default=5)
     parser.add_argument("--seed-start", type=int, default=0)
     parser.add_argument("--num-workers", type=int, default=1)
@@ -180,14 +169,11 @@ def main():
     full_train = ImageFolder(os.path.join(png_root, "train"), transform=transform)
     test_dataset = ImageFolder(os.path.join(png_root, "test"), transform=transform)
 
-    print("Running upweight DecoyMNIST with fixed hyperparameters")
+    print("Running upweight DecoyMNIST with CDEP-style optimizer/split")
     print(f"device={device}")
     print(f"png_root={png_root}")
-    print(f"train={len(full_train)} test={len(test_dataset)} val_frac={args.val_frac}")
-    print(
-        f"base_lr={args.base_lr} classifier_lr={args.classifier_lr} "
-        f"momentum={args.momentum} weight_decay={args.weight_decay}"
-    )
+    print(f"train={len(full_train)} test={len(test_dataset)} split={1.0 - args.val_frac:.2f}/{args.val_frac:.2f}")
+    print(f"optimizer=Adam lr={args.lr} weight_decay={args.weight_decay}")
 
     rows = []
     for i in range(args.n_seeds):
