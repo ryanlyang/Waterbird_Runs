@@ -263,6 +263,12 @@ def _parse_penalty_solver_choices(spec: str) -> List[Tuple[str, str, Optional[st
     return out
 
 
+def _choice_id(choice: Tuple[str, str, Optional[str]]) -> str:
+    penalty, solver, l1_ratio = choice
+    ratio_tag = "suggest" if l1_ratio == "suggest" else "none"
+    return f"{penalty}|{solver}|{ratio_tag}"
+
+
 def _parse_feature_modes(spec: str) -> List[str]:
     allowed = {"l2", "raw", "zscore"}
     out: List[str] = []
@@ -331,13 +337,28 @@ def _run_trial(
     from sklearn.linear_model import LogisticRegression
 
     t0 = time.time()
-    # Uniform random sampling over the configured search space.
-    C = float(np.exp(rng.uniform(np.log(args.C_min), np.log(args.C_max))))
-    fit_intercept = bool(rng.integers(0, 2))
-    penalty, solver, l1_ratio = _sample_penalty_solver_random(rng, args.penalty_solver_choices)
-    feature_mode = str(args.feature_modes[int(rng.integers(0, len(args.feature_modes)))])
-    class_weight = args.class_weight_choices[int(rng.integers(0, len(args.class_weight_choices)))]
-    tol = float(np.exp(rng.uniform(np.log(args.tol_min), np.log(args.tol_max))))
+    if sampler == "random":
+        # Uniform random sampling over the configured search space.
+        C = float(np.exp(rng.uniform(np.log(args.C_min), np.log(args.C_max))))
+        fit_intercept = bool(rng.integers(0, 2))
+        penalty, solver, l1_ratio = _sample_penalty_solver_random(rng, args.penalty_solver_choices)
+        feature_mode = str(args.feature_modes[int(rng.integers(0, len(args.feature_modes)))])
+        class_weight = args.class_weight_choices[int(rng.integers(0, len(args.class_weight_choices)))]
+        tol = float(np.exp(rng.uniform(np.log(args.tol_min), np.log(args.tol_max))))
+    else:
+        trial = args.trial
+        C = float(trial.suggest_float("C", args.C_min, args.C_max, log=True))
+        fit_intercept = bool(trial.suggest_categorical("fit_intercept", [True, False]))
+        choice_id = str(trial.suggest_categorical("penalty_solver", args.penalty_solver_ids))
+        penalty, solver, l1_spec = args.penalty_solver_by_id[choice_id]
+        if l1_spec == "suggest":
+            l1_ratio = float(trial.suggest_float("l1_ratio", 0.05, 0.95))
+        else:
+            l1_ratio = None
+        feature_mode = str(trial.suggest_categorical("feature_mode", args.feature_modes))
+        class_weight_name = str(trial.suggest_categorical("class_weight", args.class_weight_option_names))
+        class_weight = None if class_weight_name == "none" else "balanced"
+        tol = float(trial.suggest_float("tol", args.tol_min, args.tol_max, log=True))
 
     X_train = X_train_by_mode[feature_mode]
     X_val = X_val_by_mode[feature_mode]
@@ -546,16 +567,14 @@ def main():
     )
 
     args = p.parse_args()
-    if args.sampler != "random":
-        print(
-            "[SWEEP] sampler=tpe requested, but this runner now uses uniform random search. "
-            "Proceeding with sampler=random."
-        )
-        args.sampler = "random"
-
     args.penalty_solver_choices = _parse_penalty_solver_choices(args.penalty_solvers)
+    args.penalty_solver_ids = [_choice_id(c) for c in args.penalty_solver_choices]
+    args.penalty_solver_by_id = {
+        cid: choice for cid, choice in zip(args.penalty_solver_ids, args.penalty_solver_choices)
+    }
     args.feature_modes = _parse_feature_modes(args.feature_modes)
     args.class_weight_choices = _parse_class_weight_choices(args.class_weight_options)
+    args.class_weight_option_names = [("none" if c is None else str(c)) for c in args.class_weight_choices]
 
     class_list = [c.strip() for c in str(args.classes).split(",") if c.strip()] if args.classes else None
     classes, train_samples, val_samples, test_samples = _build_splits(
@@ -648,35 +667,112 @@ def main():
     def score(row: Dict) -> float:
         return float(row[args.objective])
 
-    for trial_id in range(args.n_trials):
-        try:
-            row = _run_trial(
-                trial_id,
-                "random",
-                rng,
-                args,
-                num_classes,
-                X_train_by_mode,
-                y_train,
-                X_val_by_mode,
-                y_val,
-                X_test_by_mode,
-                y_test,
+    if args.sampler == "random":
+        for trial_id in range(args.n_trials):
+            try:
+                row = _run_trial(
+                    trial_id,
+                    "random",
+                    rng,
+                    args,
+                    num_classes,
+                    X_train_by_mode,
+                    y_train,
+                    X_val_by_mode,
+                    y_val,
+                    X_test_by_mode,
+                    y_test,
+                )
+            except Exception as exc:
+                print(f"[SWEEP] Trial {trial_id} failed: {exc}", flush=True)
+                continue
+            _write_row(args.output_csv, row, header)
+            sweep_rows.append(row)
+            if best_row is None or score(row) > score(best_row):
+                best_row = row
+            print(
+                f"[SWEEP] Trial {trial_id} done. "
+                f"val_acc={row['val_acc']:.2f} val_avg_group_acc={row['val_avg_group_acc']:.2f} "
+                f"test_acc={row['test_acc']:.2f} test_avg_group_acc={row['test_avg_group_acc']:.2f} "
+                f"(objective={args.objective}:{row[args.objective]:.4f} "
+                f"val_worst_group_acc={row['val_worst_group_acc']:.2f} "
+                f"test_worst_group_acc={row['test_worst_group_acc']:.2f})"
             )
+    else:
+        try:
+            import optuna
         except Exception as exc:
-            print(f"[SWEEP] Trial {trial_id} failed: {exc}", flush=True)
-            continue
-        _write_row(args.output_csv, row, header)
-        sweep_rows.append(row)
-        if best_row is None or score(row) > score(best_row):
-            best_row = row
-        print(
-            f"[SWEEP] Trial {trial_id} done. "
-            f"val_acc={row['val_acc']:.2f} val_avg_group_acc={row['val_avg_group_acc']:.2f} "
-            f"test_acc={row['test_acc']:.2f} test_avg_group_acc={row['test_avg_group_acc']:.2f} "
-            f"(objective={args.objective}:{row[args.objective]:.4f} "
-            f"val_worst_group_acc={row['val_worst_group_acc']:.2f})"
-        )
+            print(f"[SWEEP] Optuna not available ({exc}); falling back to random search.")
+            args.sampler = "random"
+            for trial_id in range(args.n_trials):
+                try:
+                    row = _run_trial(
+                        trial_id,
+                        "random",
+                        rng,
+                        args,
+                        num_classes,
+                        X_train_by_mode,
+                        y_train,
+                        X_val_by_mode,
+                        y_val,
+                        X_test_by_mode,
+                        y_test,
+                    )
+                except Exception as ex2:
+                    print(f"[SWEEP] Trial {trial_id} failed: {ex2}", flush=True)
+                    continue
+                _write_row(args.output_csv, row, header)
+                sweep_rows.append(row)
+                if best_row is None or score(row) > score(best_row):
+                    best_row = row
+                print(
+                    f"[SWEEP] Trial {trial_id} done. "
+                    f"val_acc={row['val_acc']:.2f} val_avg_group_acc={row['val_avg_group_acc']:.2f} "
+                    f"test_acc={row['test_acc']:.2f} test_avg_group_acc={row['test_avg_group_acc']:.2f} "
+                    f"(objective={args.objective}:{row[args.objective]:.4f} "
+                    f"val_worst_group_acc={row['val_worst_group_acc']:.2f} "
+                    f"test_worst_group_acc={row['test_worst_group_acc']:.2f})"
+                )
+        else:
+            sampler = optuna.samplers.TPESampler(seed=args.seed)
+            study = optuna.create_study(direction="maximize", sampler=sampler)
+
+            def objective(trial):
+                nonlocal best_row
+                args.trial = trial
+                try:
+                    row = _run_trial(
+                        trial.number,
+                        "tpe",
+                        rng,
+                        args,
+                        num_classes,
+                        X_train_by_mode,
+                        y_train,
+                        X_val_by_mode,
+                        y_val,
+                        X_test_by_mode,
+                        y_test,
+                    )
+                except Exception as exc:
+                    print(f"[SWEEP] Trial {trial.number} failed: {exc}", flush=True)
+                    return -1e12
+                _write_row(args.output_csv, row, header)
+                sweep_rows.append(row)
+                if best_row is None or score(row) > score(best_row):
+                    best_row = row
+                print(
+                    f"[SWEEP] Trial {trial.number} done. "
+                    f"val_acc={row['val_acc']:.2f} val_avg_group_acc={row['val_avg_group_acc']:.2f} "
+                    f"test_acc={row['test_acc']:.2f} test_avg_group_acc={row['test_avg_group_acc']:.2f} "
+                    f"(objective={args.objective}:{row[args.objective]:.4f} "
+                    f"val_worst_group_acc={row['val_worst_group_acc']:.2f} "
+                    f"test_worst_group_acc={row['test_worst_group_acc']:.2f})"
+                )
+                return score(row)
+
+            study.optimize(objective, n_trials=args.n_trials)
 
     if best_row is not None:
         print("[SWEEP] Best trial:")
