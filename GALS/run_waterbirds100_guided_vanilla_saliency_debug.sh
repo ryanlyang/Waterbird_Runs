@@ -2,7 +2,7 @@
 # Train guided + vanilla + GALS-ViT WB100 models, then generate saliency visualizations.
 
 #SBATCH --account=reu-aisocial
-#SBATCH --partition=debug
+#SBATCH --partition=tier3
 #SBATCH --gres=gpu:a100:1
 #SBATCH --time=1-00:00:00
 #SBATCH --ntasks=1
@@ -35,9 +35,9 @@ GUIDED_GT_ROOT=${GUIDED_GT_ROOT:-/home/ryreu/guided_cnn/waterbirds/L100/Learning
 OUT_DIR_DEFAULT="${LOG_ROOT}/wb100_guided_vanilla_gals_saliency_${SLURM_JOB_ID:-local_$(date +%Y%m%d_%H%M%S)}"
 OUT_DIR=${OUT_DIR:-$OUT_DIR_DEFAULT}
 
-NUM_VAL_SAMPLES=${NUM_VAL_SAMPLES:-150}
+NUM_VAL_SAMPLES=${NUM_VAL_SAMPLES:-200}
 SAMPLE_SEED=${SAMPLE_SEED:-0}
-SAMPLE_STRATEGY=${SAMPLE_STRATEGY:-balanced}
+SAMPLE_STRATEGY=${SAMPLE_STRATEGY:-landbird_miscls_or_pointing_success}
 TARGET_CLASS=${TARGET_CLASS:-label}
 SALIENCY_METHOD=${SALIENCY_METHOD:-rise}
 RISE_NUM_MASKS=${RISE_NUM_MASKS:-2000}

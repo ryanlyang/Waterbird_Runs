@@ -116,6 +116,21 @@ def resize_map(norm_map: np.ndarray, width: int, height: int) -> np.ndarray:
     return cv2.resize(norm_map, (width, height), interpolation=cv2.INTER_LINEAR)
 
 
+def pointing_hit(saliency: np.ndarray, mask: np.ndarray) -> bool:
+    if saliency.size == 0:
+        return False
+    sal_max = float(np.max(saliency))
+    if sal_max <= 0:
+        return False
+    max_positions = np.argwhere(np.isclose(saliency, sal_max))
+    if max_positions.size == 0:
+        return False
+    for x, y in max_positions:
+        if mask[x, y] > 0:
+            return True
+    return False
+
+
 def select_val_rows(metadata_df: pd.DataFrame, num_samples: int, seed: int, strategy: str) -> pd.DataFrame:
     val_df = metadata_df[metadata_df["split"] == 1].copy()
     if len(val_df) == 0:
@@ -312,6 +327,139 @@ def build_rise_explainer(
     _ = num_classes
     explainer = RISEExplainer(prob_model=prob_model, masks=masks, gpu_batch=gpu_batch, p1=p1)
     return explainer
+
+
+def _load_binary_gt_mask(mask_path: Path, h: int, w: int) -> Optional[np.ndarray]:
+    if not mask_path.is_file():
+        return None
+    mask = np.array(open_gray_with_retry(mask_path), dtype=np.float32)
+    if mask.shape[:2] != (h, w):
+        mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
+    mask = normalize_map(mask)
+    return (mask >= 0.5).astype(np.uint8)
+
+
+@torch.no_grad()
+def _guided_predict_and_rise_saliency(
+    input_tensor: torch.Tensor,
+    label: int,
+    use_label_target: bool,
+    guided_model: nn.Module,
+    guided_rise: RISEExplainer,
+) -> Tuple[int, int, np.ndarray]:
+    logits, _ = guided_model(input_tensor)
+    pred = int(logits.argmax(dim=1).item())
+    target = label if use_label_target else pred
+    sal = guided_rise(input_tensor)[target].detach().cpu().numpy().astype(np.float32)
+    return pred, target, sal
+
+
+def select_val_rows_landbird_or_pointing_success(
+    metadata_df: pd.DataFrame,
+    data_path: Path,
+    gt_root: Path,
+    num_samples: int,
+    seed: int,
+    target_class: str,
+    preprocess: transforms.Compose,
+    device: torch.device,
+    guided_model: nn.Module,
+    guided_rise: RISEExplainer,
+) -> Tuple[pd.DataFrame, Dict[str, object]]:
+    val_df = metadata_df[metadata_df["split"] == 1].copy()
+    if len(val_df) == 0:
+        raise RuntimeError("No validation rows found in metadata.csv (split == 1).")
+
+    val_df["y"] = val_df["y"].astype(int)
+    val_df["place"] = val_df["place"].astype(int)
+    val_df["group"] = val_df["y"] * 2 + val_df["place"]
+
+    n_target = min(int(num_samples), len(val_df))
+    ordered = val_df.sample(frac=1.0, random_state=seed).reset_index(drop=True)
+    use_label_target = target_class == "label"
+
+    selected_rows: List[Dict[str, object]] = []
+    stats: Dict[str, object] = {
+        "strategy": "landbird_miscls_or_pointing_success",
+        "selection_model": "guided",
+        "target_class_mode": target_class,
+        "requested": int(num_samples),
+        "cap_after_val_size": int(n_target),
+        "val_pool_size": int(len(val_df)),
+        "evaluated": 0,
+        "missing_images": 0,
+        "missing_gt_masks": 0,
+        "landbird_miscls_hits": 0,
+        "pointing_success_hits": 0,
+        "selected_hits": 0,
+    }
+
+    for _, row in ordered.iterrows():
+        if len(selected_rows) >= n_target:
+            break
+
+        rel_path = str(row["img_filename"])
+        img_path = data_path / rel_path
+        if not img_path.is_file():
+            stats["missing_images"] = int(stats["missing_images"]) + 1
+            continue
+
+        image_pil = open_rgb_with_retry(img_path)
+        image_rgb = np.array(image_pil, dtype=np.uint8)
+        h, w = image_rgb.shape[:2]
+        input_tensor = preprocess(image_pil).unsqueeze(0).to(device)
+
+        label = int(row["y"])
+        pred, target, saliency_224 = _guided_predict_and_rise_saliency(
+            input_tensor=input_tensor,
+            label=label,
+            use_label_target=use_label_target,
+            guided_model=guided_model,
+            guided_rise=guided_rise,
+        )
+
+        # Waterbirds labeling convention: y=0 landbird, y=1 waterbird.
+        miscls_landbird = (label == 1 and pred == 0)
+        if miscls_landbird:
+            stats["landbird_miscls_hits"] = int(stats["landbird_miscls_hits"]) + 1
+
+        mask_name = rgw.mask_name_from_path(str(img_path))
+        gt_mask_path = gt_root / mask_name
+        mask_bin = _load_binary_gt_mask(gt_mask_path, h=h, w=w)
+        if mask_bin is None:
+            stats["missing_gt_masks"] = int(stats["missing_gt_masks"]) + 1
+            pointing_success = False
+        else:
+            saliency = resize_map(normalize_map(saliency_224), width=w, height=h)
+            pointing_success = pointing_hit(saliency, mask_bin)
+
+        if pointing_success:
+            stats["pointing_success_hits"] = int(stats["pointing_success_hits"]) + 1
+
+        stats["evaluated"] = int(stats["evaluated"]) + 1
+        if not (miscls_landbird or pointing_success):
+            continue
+
+        stats["selected_hits"] = int(stats["selected_hits"]) + 1
+        row_dict = row.to_dict()
+        row_dict.update(
+            {
+                "selection_model": "guided",
+                "selection_pred": int(pred),
+                "selection_target_class": int(target),
+                "selection_misclassified_as_landbird": bool(miscls_landbird),
+                "selection_pointing_success": bool(pointing_success),
+                "selection_gt_mask_path": str(gt_mask_path) if mask_bin is not None else None,
+            }
+        )
+        selected_rows.append(row_dict)
+
+    selected = pd.DataFrame(selected_rows).reset_index(drop=True)
+    stats["selected_final"] = int(len(selected))
+    stats["hit_rate_over_evaluated"] = (
+        float(len(selected)) / float(stats["evaluated"]) if int(stats["evaluated"]) > 0 else 0.0
+    )
+    return selected, stats
 
 
 def extract_state_dict(ckpt_obj: object) -> Dict[str, torch.Tensor]:
@@ -728,7 +876,14 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--num-val-samples", type=int, default=150)
     p.add_argument("--sample-seed", type=int, default=0)
-    p.add_argument("--sample-strategy", choices=["balanced", "random"], default="balanced")
+    p.add_argument(
+        "--sample-strategy",
+        choices=["balanced", "random", "landbird_miscls_or_pointing_success"],
+        default="balanced",
+    )
+    # Kept for backward compatibility with old sbatch wrappers.
+    # Current conditional strategy is intentionally GUIDED-only.
+    p.add_argument("--selection-model", choices=["guided", "vanilla", "gals_vit"], default="guided")
     p.add_argument("--target-class", choices=["label", "pred"], default="label")
     p.add_argument(
         "--saliency-method",
@@ -893,13 +1048,43 @@ def main() -> None:
             p1=float(args.rise_p1),
         )
 
-    selected = select_val_rows(
-        metadata_df=metadata_df,
-        num_samples=args.num_val_samples,
-        seed=args.sample_seed,
-        strategy=args.sample_strategy,
-    )
+    preprocess = build_preprocess()
+    selection_stats: Optional[Dict[str, object]] = None
+    if args.sample_strategy == "landbird_miscls_or_pointing_success":
+        if args.selection_model != "guided":
+            print(
+                f"[WARN] selection_model={args.selection_model} was requested, "
+                "but this strategy is GUIDED-only. Using guided.",
+                flush=True,
+            )
+        selected, selection_stats = select_val_rows_landbird_or_pointing_success(
+            metadata_df=metadata_df,
+            data_path=data_path,
+            gt_root=gt_root,
+            num_samples=args.num_val_samples,
+            seed=args.sample_seed,
+            target_class=args.target_class,
+            preprocess=preprocess,
+            device=device,
+            guided_model=guided_model,
+            guided_rise=guided_rise,
+        )
+    else:
+        selected = select_val_rows(
+            metadata_df=metadata_df,
+            num_samples=args.num_val_samples,
+            seed=args.sample_seed,
+            strategy=args.sample_strategy,
+        )
     print(f"[INFO] Selected {len(selected)} val images for saliency generation.", flush=True)
+    if selection_stats is not None:
+        print(f"[INFO] Selection stats: {json.dumps(selection_stats)}", flush=True)
+        if len(selected) < int(args.num_val_samples):
+            print(
+                "[WARN] Fewer than requested samples satisfied "
+                "(waterbird->landbird misclass OR pointing-game success).",
+                flush=True,
+            )
     print(
         (
             "[INFO] Saliency method=RISE "
@@ -909,8 +1094,6 @@ def main() -> None:
         flush=True,
     )
     print(f"[INFO] RISE mask bank: {rise_masks_path}", flush=True)
-
-    preprocess = build_preprocess()
     sample_rows: List[Dict[str, object]] = []
 
     for i, row in selected.iterrows():
@@ -940,6 +1123,13 @@ def main() -> None:
             "group": group,
             "group_name": GROUP_NAMES[group] if 0 <= group < len(GROUP_NAMES) else str(group),
         }
+        if "selection_model" in row:
+            info["selection_model"] = row.get("selection_model")
+            info["selection_pred"] = row.get("selection_pred")
+            info["selection_target_class"] = row.get("selection_target_class")
+            info["selection_misclassified_as_landbird"] = row.get("selection_misclassified_as_landbird")
+            info["selection_pointing_success"] = row.get("selection_pointing_success")
+            info["selection_gt_mask_path"] = row.get("selection_gt_mask_path")
 
         with torch.no_grad():
             # Guided
@@ -1018,6 +1208,8 @@ def main() -> None:
         "num_val_samples_requested": int(args.num_val_samples),
         "num_val_samples_generated": int(len(sample_rows)),
         "sample_strategy": args.sample_strategy,
+        "selection_model": "guided" if args.sample_strategy == "landbird_miscls_or_pointing_success" else None,
+        "selection_rule_stats": selection_stats,
         "target_class_mode": args.target_class,
         "saliency_method": args.saliency_method,
         "rise": {
@@ -1058,6 +1250,12 @@ def main() -> None:
             "gals_vit_confidence",
             "gals_vit_saliency_target_class",
             "gt_mask_path",
+            "selection_model",
+            "selection_pred",
+            "selection_target_class",
+            "selection_misclassified_as_landbird",
+            "selection_pointing_success",
+            "selection_gt_mask_path",
         ]
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()

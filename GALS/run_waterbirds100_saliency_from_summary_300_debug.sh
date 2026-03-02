@@ -1,6 +1,6 @@
 #!/bin/bash -l
 # Reuse existing WB100 guided/vanilla/GALS checkpoints from run_summary.json
-# and generate a larger saliency set (default: 300 val samples).
+# and generate saliency set with conditional val-image selection (default: 200).
 
 #SBATCH --account=reu-aisocial
 #SBATCH --partition=debug
@@ -36,9 +36,9 @@ GUIDED_GT_ROOT=${GUIDED_GT_ROOT:-/home/ryreu/guided_cnn/waterbirds/L100/Learning
 # Existing WB100 saliency run summary with checkpoint paths.
 SUMMARY_JSON=${SUMMARY_JSON:-/home/ryreu/guided_cnn/logsWaterbird/wb100_guided_vanilla_gals_saliency_21064644/run_summary.json}
 
-NUM_VAL_SAMPLES=${NUM_VAL_SAMPLES:-300}
+NUM_VAL_SAMPLES=${NUM_VAL_SAMPLES:-200}
 SAMPLE_SEED=${SAMPLE_SEED:-0}
-SAMPLE_STRATEGY=${SAMPLE_STRATEGY:-balanced}
+SAMPLE_STRATEGY=${SAMPLE_STRATEGY:-landbird_miscls_or_pointing_success}
 TARGET_CLASS=${TARGET_CLASS:-label}
 
 OUT_DIR_DEFAULT="${LOG_ROOT}/wb100_guided_vanilla_gals_saliency_${SLURM_JOB_ID:-local_$(date +%Y%m%d_%H%M%S)}_n${NUM_VAL_SAMPLES}"
@@ -86,9 +86,18 @@ if [[ -z "$VANILLA_CKPT" || ! -f "$VANILLA_CKPT" ]]; then
 fi
 
 RUN_GALS=${RUN_GALS:-1}
-if [[ -z "$GALS_CKPT" || ! -f "$GALS_CKPT" ]]; then
-  echo "[WARN] GALS checkpoint missing in summary; running without GALS."
-  RUN_GALS=0
+REQUIRE_GALS=${REQUIRE_GALS:-1}
+if [[ "$RUN_GALS" == "1" ]]; then
+  if [[ -z "$GALS_CKPT" || ! -f "$GALS_CKPT" ]]; then
+    if [[ "$REQUIRE_GALS" == "1" ]]; then
+      echo "[ERROR] GALS checkpoint missing/invalid, but REQUIRE_GALS=1: $GALS_CKPT" >&2
+      echo "[ERROR] Provide GALS_CKPT=... or set REQUIRE_GALS=0 to allow running without GALS." >&2
+      exit 1
+    else
+      echo "[WARN] GALS checkpoint missing in summary; running without GALS (REQUIRE_GALS=0)."
+      RUN_GALS=0
+    fi
+  fi
 fi
 
 cd "$REPO_ROOT/GALS"
@@ -130,4 +139,3 @@ if [[ -n "${SLURM_JOB_ID:-}" ]]; then
 else
   "${CMD[@]}"
 fi
-
