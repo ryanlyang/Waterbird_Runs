@@ -1,11 +1,11 @@
 #!/bin/bash -l
 #SBATCH --account=reu-aisocial
-#SBATCH --partition=debug
+#SBATCH --partition=tier3
 #SBATCH --gres=gpu:1
-#SBATCH --time=02:00:00
+#SBATCH --time=08:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=16G
+#SBATCH --mem=48G
 #SBATCH --output=/home/ryreu/guided_cnn/logsMNIST/decoy_clip_lr_fixed_%j.out
 #SBATCH --error=/home/ryreu/guided_cnn/logsMNIST/decoy_clip_lr_fixed_%j.err
 #SBATCH --signal=TERM@120
@@ -27,6 +27,8 @@ FIT_INTERCEPT="${FIT_INTERCEPT:-1}"
 SEEDS="${SEEDS:-0,1,2,3,4}"
 VAL_FRAC="${VAL_FRAC:-0.10}"
 SPLIT_SEED="${SPLIT_SEED:-0}"
+BATCH_SIZE="${BATCH_SIZE:-128}"
+NUM_WORKERS="${NUM_WORKERS:-0}"
 
 mkdir -p "${LOG_DIR}"
 
@@ -54,6 +56,7 @@ python -u run_decoy_clip_lr_fixed.py \
   --png-root "${DATA_PATH}" \
   --clip-repo "${CLIP_REPO}" \
   --clip-model "${CLIP_MODEL}" \
+  --batch-size "${BATCH_SIZE}" \
   --C "${C_VAL}" \
   --penalty "${PENALTY}" \
   --solver "${SOLVER}" \
@@ -61,5 +64,5 @@ python -u run_decoy_clip_lr_fixed.py \
   --seeds "${SEEDS}" \
   --val-frac "${VAL_FRAC}" \
   --split-seed "${SPLIT_SEED}" \
-  --num-workers "${SLURM_CPUS_PER_TASK:-1}" \
+  --num-workers "${NUM_WORKERS}" \
   --output-csv "${OUT_CSV}"

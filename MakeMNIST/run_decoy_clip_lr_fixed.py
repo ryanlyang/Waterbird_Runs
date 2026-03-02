@@ -28,6 +28,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 import numpy as np
 import torch
 from torchvision.datasets import ImageFolder
+from tqdm import tqdm
 
 
 def _parse_csv_list(text: str) -> List[str]:
@@ -95,8 +96,9 @@ def _seed_everything(seed: int) -> None:
 
 def _l2_normalize(x: np.ndarray, eps: float = 1e-12) -> np.ndarray:
     denom = np.linalg.norm(x, axis=1, keepdims=True)
-    denom = np.maximum(denom, eps)
-    return x / denom
+    np.maximum(denom, eps, out=denom)
+    x /= denom
+    return x
 
 
 def _class_acc(y_true: np.ndarray, y_pred: np.ndarray, num_classes: int) -> np.ndarray:
@@ -120,6 +122,7 @@ def _extract_features(
     device: str,
     batch_size: int,
     num_workers: int,
+    desc: str = "features",
 ) -> Tuple[np.ndarray, np.ndarray]:
     from torch.utils.data import DataLoader
 
@@ -129,26 +132,35 @@ def _extract_features(
         shuffle=False,
         num_workers=num_workers,
         pin_memory=("cuda" in device),
+        persistent_workers=(num_workers > 0),
     )
 
-    feats: List[np.ndarray] = []
-    labels: List[np.ndarray] = []
+    X: Optional[np.ndarray] = None
+    y_all = np.empty((len(dataset),), dtype=np.int64)
+    offset = 0
 
     model.eval()
     with torch.no_grad():
-        for images, y in loader:
+        for images, y in tqdm(loader, desc=f"[CLIP-LR] Extracting {desc}", leave=False):
             images = images.to(device, non_blocking=True)
             f = model.encode_image(images).float()
             f = f / f.norm(dim=-1, keepdim=True)
-            feats.append(f.cpu().numpy())
-            labels.append(y.numpy())
+            f_np = f.cpu().numpy().astype(np.float32, copy=False)
+            bsz = f_np.shape[0]
+            if X is None:
+                X = np.empty((len(dataset), f_np.shape[1]), dtype=np.float32)
+            X[offset:offset + bsz] = f_np
+            y_all[offset:offset + bsz] = y.numpy().astype(np.int64, copy=False)
+            offset += bsz
 
-    X = np.concatenate(feats, axis=0).astype(np.float64, copy=False)
-    X = np.ascontiguousarray(X, dtype=np.float64)
+    if X is None:
+        raise RuntimeError("No features extracted; dataset is empty.")
+    if offset != len(dataset):
+        raise RuntimeError(f"Feature extraction size mismatch: offset={offset}, n={len(dataset)}")
+
     if not np.isfinite(X).all():
         X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
-    y = np.concatenate(labels, axis=0).astype(np.int64, copy=False)
-    return X, y
+    return X, y_all
 
 
 def _split_train_val(n_total: int, val_frac: float, split_seed: int) -> Tuple[np.ndarray, np.ndarray]:
@@ -236,8 +248,8 @@ def main() -> None:
     p.add_argument("--clip-model", type=str, default="RN50")
     p.add_argument("--clip-repo", type=str, default="")
     p.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
-    p.add_argument("--batch-size", type=int, default=256)
-    p.add_argument("--num-workers", type=int, default=4)
+    p.add_argument("--batch-size", type=int, default=128)
+    p.add_argument("--num-workers", type=int, default=0)
     p.add_argument("--val-frac", type=float, default=0.10)
     p.add_argument("--split-seed", type=int, default=0)
     p.add_argument("--seeds", type=str, default="0,1,2,3,4", help="LogReg random_state seeds")
@@ -290,6 +302,7 @@ def main() -> None:
         args.device,
         args.batch_size,
         args.num_workers,
+        desc="train",
     )
     X_test, y_test = _extract_features(
         test_ds,
@@ -297,7 +310,13 @@ def main() -> None:
         args.device,
         args.batch_size,
         args.num_workers,
+        desc="test",
     )
+
+    # Free CLIP model before sklearn fit to reduce peak memory.
+    del model
+    if "cuda" in args.device and torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     X_train_full = _l2_normalize(X_train_full)
     X_test = _l2_normalize(X_test)
