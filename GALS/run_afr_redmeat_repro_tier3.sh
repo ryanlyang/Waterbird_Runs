@@ -67,7 +67,8 @@ OUTPUT_ROOT="${OUTPUT_ROOT:-/home/ryreu/guided_cnn/logsRedMeat/afr_repro_redmeat
 LOGS_ROOT="${LOGS_ROOT:-/home/ryreu/guided_cnn/logsRedMeat/afr_repro_redmeat_full_logs_${SLURM_JOB_ID}}"
 
 # Paper-style AFR schedule (ported from Waterbirds AFR script)
-SEEDS="${SEEDS:-0,21,42}"
+# Default hardcoded to 5 seeds for stable mean/std reporting.
+SEEDS="${SEEDS:-0,1,2,3,4}"
 FULL_PAPER_GRID="${FULL_PAPER_GRID:-1}"
 GAMMAS="${GAMMAS:-4,6,8,10,12,14,16,18,20}"
 REG_COEFFS="${REG_COEFFS:-0,0.1,0.2,0.3,0.4}"

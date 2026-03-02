@@ -641,10 +641,10 @@ def run(args: argparse.Namespace) -> None:
         f.write(f"Place counts: {prep_info['place_counts']}\n")
         for note in prep_info.get("notes", []):
             f.write(f"Note: {note}\n")
-        f.write(f"Mean best test@val mean_acc: {mean_best_test_mean_at_val:.4f}\n")
-        f.write(f"Std best test@val mean_acc: {std_best_test_mean_at_val:.4f}\n")
-        f.write(f"Mean best test@val WGA: {mean_best:.4f}\n")
-        f.write(f"Std best test@val WGA: {std_best:.4f}\n")
+        f.write(f"Mean best test@val test_acc: {mean_best_test_mean_at_val:.4f}\n")
+        f.write(f"Std best test@val test_acc: {std_best_test_mean_at_val:.4f}\n")
+        f.write(f"Mean best test@val worst_group_acc: {mean_best:.4f}\n")
+        f.write(f"Std best test@val worst_group_acc: {std_best:.4f}\n")
         f.write(f"Best-per-seed CSV: {best_csv}\n")
         f.write(f"All stage2 CSV: {stage2_csv}\n")
 
@@ -653,10 +653,13 @@ def run(args: argparse.Namespace) -> None:
     print(f"Best by seed:        {best_csv}")
     print(f"Summary:             {summary_txt}")
     print(
-        f"Mean best test@val mean_acc across seeds: "
+        f"Mean best test@val test_acc across seeds: "
         f"{mean_best_test_mean_at_val:.4f} +/- {std_best_test_mean_at_val:.4f}"
     )
-    print(f"Mean best test@val WGA across seeds: {mean_best:.4f} +/- {std_best:.4f}")
+    print(
+        f"Mean best test@val worst_group_acc across seeds: "
+        f"{mean_best:.4f} +/- {std_best:.4f}"
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
