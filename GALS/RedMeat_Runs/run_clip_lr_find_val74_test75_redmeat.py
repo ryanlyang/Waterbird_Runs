@@ -31,6 +31,23 @@ def _write_row(csv_path: str, row: Dict, header: Iterable[str]) -> None:
         w.writerow(row)
 
 
+def _rank_any(row: Dict, target_val_acc: float, target_test_acc_max: float):
+    val_acc = float(row["val_acc"])
+    test_acc = float(row["test_acc"])
+    val_shortfall = max(0.0, target_val_acc - val_acc)
+    test_gap = abs(test_acc - target_test_acc_max)
+    return (val_shortfall, test_gap, -val_acc)
+
+
+def _rank_val_ok(row: Dict, target_test_acc_max: float):
+    # Among rows already satisfying val_acc > target_val_acc, prefer the
+    # closest test_acc to threshold, then higher val_acc.
+    val_acc = float(row["val_acc"])
+    test_acc = float(row["test_acc"])
+    test_gap = abs(test_acc - target_test_acc_max)
+    return (test_gap, -val_acc)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(
         description=(
@@ -148,6 +165,8 @@ def main() -> None:
 
     matches: List[Dict] = []
     rows: List[Dict] = []
+    closest_any: Dict | None = None
+    closest_val_ok: Dict | None = None
     t0 = time.time()
 
     if args.sampler == "random":
@@ -176,6 +195,18 @@ def main() -> None:
             row["matched"] = int(bool(matched))
             _write_row(args.output_csv, row, header)
             rows.append(row)
+
+            if (closest_any is None) or (
+                _rank_any(row, float(args.target_val_acc), float(args.target_test_acc_max))
+                < _rank_any(closest_any, float(args.target_val_acc), float(args.target_test_acc_max))
+            ):
+                closest_any = dict(row)
+            if float(row["val_acc"]) > float(args.target_val_acc):
+                if (closest_val_ok is None) or (
+                    _rank_val_ok(row, float(args.target_test_acc_max))
+                    < _rank_val_ok(closest_val_ok, float(args.target_test_acc_max))
+                ):
+                    closest_val_ok = dict(row)
 
             print(
                 f"[SEARCH] Trial {trial_id}: val_acc={row['val_acc']:.2f} test_acc={row['test_acc']:.2f} "
@@ -233,6 +264,18 @@ def main() -> None:
             _write_row(args.output_csv, row, header)
             rows.append(row)
 
+            if (closest_any is None) or (
+                _rank_any(row, float(args.target_val_acc), float(args.target_test_acc_max))
+                < _rank_any(closest_any, float(args.target_val_acc), float(args.target_test_acc_max))
+            ):
+                closest_any = dict(row)
+            if float(row["val_acc"]) > float(args.target_val_acc):
+                if (closest_val_ok is None) or (
+                    _rank_val_ok(row, float(args.target_test_acc_max))
+                    < _rank_val_ok(closest_val_ok, float(args.target_test_acc_max))
+                ):
+                    closest_val_ok = dict(row)
+
             print(
                 f"[SEARCH] Trial {trial_id}: val_acc={row['val_acc']:.2f} test_acc={row['test_acc']:.2f} "
                 f"val_avg_group_acc={row['val_avg_group_acc']:.2f} test_avg_group_acc={row['test_avg_group_acc']:.2f} "
@@ -268,8 +311,30 @@ def main() -> None:
         print(f"[DONE] Wrote {len(matches)} matched rows to: {args.matches_csv}", flush=True)
     else:
         print("[DONE] No matching trial found within max-trials.", flush=True)
+        closest = closest_val_ok if closest_val_ok is not None else closest_any
+        if closest is not None:
+            val_acc = float(closest["val_acc"])
+            test_acc = float(closest["test_acc"])
+            print(
+                f"[CLOSEST] trial={closest['trial']} val_acc={val_acc:.2f} test_acc={test_acc:.2f} "
+                f"val_avg_group_acc={float(closest['val_avg_group_acc']):.2f} "
+                f"test_avg_group_acc={float(closest['test_avg_group_acc']):.2f} "
+                f"C={closest['C']} penalty={closest['penalty']} solver={closest['solver']} "
+                f"fit_intercept={closest['fit_intercept']}",
+                flush=True,
+            )
+            if val_acc <= float(args.target_val_acc):
+                print(
+                    f"[CLOSEST] Note: closest trial did not meet val_acc > {float(args.target_val_acc):.2f}.",
+                    flush=True,
+                )
+            if test_acc >= float(args.target_test_acc_max):
+                print(
+                    f"[CLOSEST] Note: test_acc is {test_acc - float(args.target_test_acc_max):.2f} above "
+                    f"target threshold {float(args.target_test_acc_max):.2f}.",
+                    flush=True,
+                )
 
 
 if __name__ == "__main__":
     main()
-
