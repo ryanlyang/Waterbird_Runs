@@ -60,12 +60,13 @@ export PYTHONNOUSERSITE=1
 REPO_ROOT=/home/ryreu/guided_cnn/waterbirds/Waterbird_Runs
 DATA_PATH=/home/ryreu/guided_cnn/waterbirds/waterbird_1.0_forest2water2
 
-N_TRIALS=${N_TRIALS:-100}
+N_TRIALS=${N_TRIALS:-50}
 SWEEP_SEED=${SWEEP_SEED:-0}
 TRAIN_SEED=${TRAIN_SEED:-0}
 SAMPLER=${SAMPLER:-tpe}
 POST_SEEDS=${POST_SEEDS:-5}
 POST_SEED_START=${POST_SEED_START:-0}
+NUM_EPOCHS=${NUM_EPOCHS:-200}
 
 BASE_LR_MIN=${BASE_LR_MIN:-1e-5}
 BASE_LR_MAX=${BASE_LR_MAX:-5e-2}
@@ -97,6 +98,8 @@ echo "[$(date)] Host: $(hostname)"
 echo "Repo: $REPO_ROOT"
 echo "Data: $DATA_PATH"
 echo "Trials: $N_TRIALS (sampler=$SAMPLER sweep_seed=$SWEEP_SEED train_seed=$TRAIN_SEED)"
+echo "Epochs: $NUM_EPOCHS"
+echo "Ranges: base_lr=[$BASE_LR_MIN,$BASE_LR_MAX] cls_lr=[$CLS_LR_MIN,$CLS_LR_MAX] momentum=[$MOMENTUM_MIN,$MOMENTUM_MAX]"
 echo "Output CSV: $OUT_CSV"
 echo "Post CSV: $POST_OUT_CSV"
 echo "SAVE_CHECKPOINTS=$SAVE_CHECKPOINTS"
@@ -108,6 +111,7 @@ ARGS=(
   --seed "$SWEEP_SEED"
   --train-seed "$TRAIN_SEED"
   --sampler "$SAMPLER"
+  --num-epochs "$NUM_EPOCHS"
   --base-lr-min "$BASE_LR_MIN" --base-lr-max "$BASE_LR_MAX"
   --cls-lr-min "$CLS_LR_MIN" --cls-lr-max "$CLS_LR_MAX"
   --weight-decay "$WEIGHT_DECAY"

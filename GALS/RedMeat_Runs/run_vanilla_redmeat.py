@@ -3,8 +3,10 @@ import argparse
 import copy
 import os
 import random
+import sys
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import List, Optional
 
 import numpy as np
@@ -19,6 +21,22 @@ from torchvision import models, transforms
 
 
 os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+
+
+def _gals_repo_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def _try_import_clip():
+    try:
+        import clip  # type: ignore
+        return clip
+    except Exception:
+        repo_root = str(_gals_repo_root())
+        if repo_root not in sys.path:
+            sys.path.insert(0, repo_root)
+        from CLIP.clip import clip  # type: ignore
+        return clip
 
 
 def seed_everything(seed: int):
@@ -100,7 +118,57 @@ class RedMeatMetadataDataset(Dataset):
         return img, label, path
 
 
-def make_model(model_name: str, num_classes: int, pretrained: bool):
+class CLIPRN50CAM(nn.Module):
+    """CLIP RN50 visual backbone + GAP classifier head for vanilla training."""
+
+    def __init__(self, num_classes: int, clip_model_name: str = "RN50", pretrained: bool = True):
+        super().__init__()
+        if clip_model_name != "RN50":
+            raise ValueError(f"CLIPRN50CAM currently supports clip_model_name='RN50' only, got: {clip_model_name}")
+        if not pretrained:
+            raise ValueError("CLIPRN50CAM requires pretrained=True (random-init CLIP RN50 is unsupported).")
+
+        clip_lib = _try_import_clip()
+        clip_model, _ = clip_lib.load(clip_model_name, device="cpu", jit=False)
+        clip_model = clip_model.float()
+        visual = clip_model.visual
+
+        self.conv1 = visual.conv1
+        self.bn1 = visual.bn1
+        self.conv2 = visual.conv2
+        self.bn2 = visual.bn2
+        self.conv3 = visual.conv3
+        self.bn3 = visual.bn3
+        self.avgpool = visual.avgpool
+        self.relu = visual.relu
+        self.layer1 = visual.layer1
+        self.layer2 = visual.layer2
+        self.layer3 = visual.layer3
+        self.layer4 = visual.layer4
+
+        feat_dim = int(self.layer4[-1].bn3.num_features)
+        self.gap = nn.AdaptiveAvgPool2d((1, 1))
+        self.classifier = nn.Linear(feat_dim, num_classes)
+
+    def _stem(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.relu(self.bn1(self.conv1(x)))
+        x = self.relu(self.bn2(self.conv2(x)))
+        x = self.relu(self.bn3(self.conv3(x)))
+        x = self.avgpool(x)
+        return x
+
+    def forward(self, x: torch.Tensor):
+        x = x.to(dtype=self.conv1.weight.dtype)
+        x = self._stem(x)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        feats = self.layer4(x)
+        logits = self.classifier(self.gap(feats).flatten(1))
+        return logits
+
+
+def make_model(model_name: str, num_classes: int, pretrained: bool, clip_model: str = "RN50"):
     if model_name == "resnet50":
         model = models.resnet50(pretrained=pretrained)
         model.fc = nn.Linear(model.fc.in_features, num_classes)
@@ -109,7 +177,53 @@ def make_model(model_name: str, num_classes: int, pretrained: bool):
         model = models.resnet18(pretrained=pretrained)
         model.fc = nn.Linear(model.fc.in_features, num_classes)
         return model
+    if model_name == "clip_rn50":
+        return CLIPRN50CAM(num_classes=num_classes, clip_model_name=clip_model, pretrained=pretrained)
     raise ValueError(f"Unsupported model_name: {model_name}")
+
+
+def configure_tune_mode(model: nn.Module, tune_mode: str) -> None:
+    """
+    Configure trainable parameters:
+    - full: train everything
+    - layer4_head: train layer4 + classifier/fc only
+    - linear_probe: train classifier/fc only
+    """
+    mode = str(tune_mode).strip().lower()
+    if mode == "full":
+        for p in model.parameters():
+            p.requires_grad = True
+        return
+
+    for p in model.parameters():
+        p.requires_grad = False
+
+    # classifier/fc head
+    head = None
+    if hasattr(model, "classifier"):
+        head = model.classifier
+    elif hasattr(model, "fc"):
+        head = model.fc
+    if head is None:
+        raise AttributeError(f"Model does not expose `.classifier` or `.fc`; cannot apply tune_mode={mode}")
+    for p in head.parameters():
+        p.requires_grad = True
+
+    if mode == "linear_probe":
+        return
+
+    if mode == "layer4_head":
+        if not hasattr(model, "layer4"):
+            raise AttributeError(f"Model does not expose `.layer4`; cannot apply tune_mode={mode}")
+        for p in model.layer4.parameters():
+            p.requires_grad = True
+        return
+
+    raise ValueError(f"Unsupported tune_mode: {tune_mode}")
+
+
+def _count_trainable_params(model: nn.Module) -> int:
+    return int(sum(p.numel() for p in model.parameters() if p.requires_grad))
 
 
 def _class_balanced_acc(labels_np: np.ndarray, preds_np: np.ndarray, num_classes: int):
@@ -225,9 +339,21 @@ def train_model(model, dataloaders, dataset_sizes, num_classes, num_epochs, opti
     return model, best_balanced, best_epoch
 
 
-def build_dataloaders(data_path, batch_size, num_workers, generator, classes: Optional[List[str]] = None):
-    mean = [0.485, 0.456, 0.406]
-    std = [0.229, 0.224, 0.225]
+def build_dataloaders(
+    data_path,
+    batch_size,
+    num_workers,
+    generator,
+    classes: Optional[List[str]] = None,
+    model_name: str = "resnet50",
+):
+    if model_name == "clip_rn50":
+        # OpenAI CLIP image normalization.
+        mean = [0.48145466, 0.4578275, 0.40821073]
+        std = [0.26862954, 0.26130258, 0.27577711]
+    else:
+        mean = [0.485, 0.456, 0.406]
+        std = [0.229, 0.224, 0.225]
     tfm = transforms.Compose(
         [
             transforms.Resize((224, 224)),
@@ -282,10 +408,21 @@ def run_single(args):
         class_list = [c.strip() for c in str(args.classes).split(",") if c.strip()]
 
     dataloaders, dataset_sizes, test_loader, num_classes = build_dataloaders(
-        args.data_path, args.batch_size, args.num_workers, g, classes=class_list
+        args.data_path,
+        args.batch_size,
+        args.num_workers,
+        g,
+        classes=class_list,
+        model_name=args.model,
     )
 
-    model = make_model(args.model, num_classes, pretrained=args.pretrained).to(device)
+    model = make_model(
+        args.model,
+        num_classes,
+        pretrained=args.pretrained,
+        clip_model=getattr(args, "clip_model", "RN50"),
+    ).to(device)
+    configure_tune_mode(model, tune_mode=getattr(args, "tune_mode", "full"))
 
     base_lr = getattr(args, "base_lr", None)
     classifier_lr = getattr(args, "classifier_lr", None)
@@ -298,17 +435,24 @@ def run_single(args):
         classifier_lr = args.lr
 
     base_params = []
-    fc_params = []
+    head_params = []
     for name, param in model.named_parameters():
-        if "fc" in name:
-            fc_params.append(param)
+        if not param.requires_grad:
+            continue
+        if ("fc" in name) or ("classifier" in name):
+            head_params.append(param)
         else:
             base_params.append(param)
 
-    param_groups = [
-        {"params": base_params, "lr": float(base_lr)},
-        {"params": fc_params, "lr": float(classifier_lr)},
-    ]
+    # Fallback if head name matching fails.
+    if not head_params:
+        head_params = [p for p in model.parameters() if p.requires_grad]
+        base_params = []
+
+    param_groups = []
+    if base_params:
+        param_groups.append({"params": base_params, "lr": float(base_lr)})
+    param_groups.append({"params": head_params, "lr": float(classifier_lr)})
 
     optimizer = optim.SGD(
         param_groups,
@@ -318,7 +462,9 @@ def run_single(args):
     )
 
     print(
-        f"\n=== RUN: model={args.model} epochs={args.num_epochs} "
+        f"\n=== RUN: model={args.model} clip_model={getattr(args, 'clip_model', 'N/A')} "
+        f"tune_mode={getattr(args, 'tune_mode', 'full')} trainable_params={_count_trainable_params(model):,} "
+        f"epochs={args.num_epochs} "
         f"base_lr={base_lr} classifier_lr={classifier_lr} "
         f"momentum={args.momentum} wd={args.weight_decay} nesterov={args.nesterov} seed={args.seed} ===",
         flush=True,
@@ -365,7 +511,9 @@ def parse_args():
     p = argparse.ArgumentParser(description="Vanilla RedMeat CNN trainer (no guidance loss).")
     p.add_argument("data_path", help="RedMeat dataset root containing all_images.csv")
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--model", choices=["resnet50", "resnet18"], default="resnet50")
+    p.add_argument("--model", choices=["resnet50", "resnet18", "clip_rn50"], default="resnet50")
+    p.add_argument("--clip-model", default="RN50", help="Used when --model clip_rn50.")
+    p.add_argument("--tune-mode", choices=["full", "layer4_head", "linear_probe"], default="full")
     p.add_argument("--pretrained", action="store_true", default=True)
     p.add_argument("--no-pretrained", action="store_false", dest="pretrained")
     p.add_argument("--batch-size", type=int, default=96)

@@ -59,6 +59,8 @@ def _build_run_args(
         data_path=args.data_path,
         seed=seed,
         model=args.model,
+        clip_model=args.clip_model,
+        tune_mode=args.tune_mode,
         pretrained=args.pretrained,
         batch_size=args.batch_size,
         num_epochs=args.num_epochs,
@@ -105,6 +107,10 @@ def _run_trial(trial_id: int, args, rng: np.random.Generator, sampler_name: str)
 
     return {
         "trial": trial_id,
+        "model": args.model,
+        "clip_model": args.clip_model,
+        "tune_mode": args.tune_mode,
+        "pretrained": int(bool(args.pretrained)),
         "base_lr": base_lr,
         "classifier_lr": classifier_lr,
         "weight_decay": args.weight_decay,
@@ -129,7 +135,9 @@ def main():
     p.add_argument("--train-seed", type=int, default=0, help="Fixed training seed during hyperparameter search")
     p.add_argument("--sampler", choices=["tpe", "random"], default="tpe")
 
-    p.add_argument("--model", choices=["resnet50", "resnet18"], default="resnet50")
+    p.add_argument("--model", choices=["resnet50", "resnet18", "clip_rn50"], default="resnet50")
+    p.add_argument("--clip-model", default="RN50", help="Used when --model clip_rn50.")
+    p.add_argument("--tune-mode", choices=["full", "layer4_head", "linear_probe"], default="full")
     p.add_argument("--pretrained", action="store_true", default=True)
     p.add_argument("--no-pretrained", action="store_false", dest="pretrained")
     p.add_argument("--batch-size", type=int, default=96)
@@ -170,6 +178,10 @@ def main():
 
     header = [
         "trial",
+        "model",
+        "clip_model",
+        "tune_mode",
+        "pretrained",
         "base_lr",
         "classifier_lr",
         "weight_decay",
@@ -233,6 +245,10 @@ def main():
     post_header = [
         "phase",
         "seed",
+        "model",
+        "clip_model",
+        "tune_mode",
+        "pretrained",
         "base_lr",
         "classifier_lr",
         "weight_decay",
@@ -270,6 +286,10 @@ def main():
         row = {
             "phase": "best5",
             "seed": seed,
+            "model": args.model,
+            "clip_model": args.clip_model,
+            "tune_mode": args.tune_mode,
+            "pretrained": int(bool(args.pretrained)),
             "base_lr": best_base_lr,
             "classifier_lr": best_classifier_lr,
             "weight_decay": best_wd,
