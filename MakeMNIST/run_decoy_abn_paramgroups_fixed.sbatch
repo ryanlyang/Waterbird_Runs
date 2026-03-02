@@ -12,10 +12,10 @@
 
 set -Eeuo pipefail
 
-REPO_ROOT="/home/ryreu/guided_cnn/MNIST_AGAIN/MakeMNIST"
+REPO_ROOT="${REPO_ROOT:-/home/ryreu/guided_cnn/waterbirds/Waterbird_Runs/MakeMNIST}"
 CONDA_ENV="learntolook"
 LOG_DIR="/home/ryreu/guided_cnn/logsMNIST"
-DATA_PATH="${REPO_ROOT}/data/DecoyMNIST_png"
+DATA_PATH="${DATA_PATH:-/home/ryreu/guided_cnn/MNIST_AGAIN/MakeMNIST/data/DecoyMNIST_png}"
 
 # CDEP-style optimizer defaults.
 LR=0.001
