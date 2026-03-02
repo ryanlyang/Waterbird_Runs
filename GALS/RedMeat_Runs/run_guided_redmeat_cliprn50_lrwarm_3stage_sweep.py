@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import copy
 import csv
+import inspect
 import os
 import random
 import sys
@@ -216,7 +217,7 @@ class Runner:
     ) -> Tuple[np.ndarray, np.ndarray]:
         X_train, y_train = self._extract_backbone_features(model, train_eval_loader)
 
-        clf = LogisticRegression(
+        lr_kwargs = dict(
             C=float(self.args.lr_C),
             penalty=str(self.args.lr_penalty),
             solver=str(self.args.lr_solver),
@@ -225,8 +226,11 @@ class Runner:
             random_state=int(self.args.seed),
             n_jobs=1,
             verbose=0,
-            multi_class="auto",
         )
+        # sklearn >= 1.8 removed the `multi_class` constructor arg.
+        if "multi_class" in inspect.signature(LogisticRegression.__init__).parameters:
+            lr_kwargs["multi_class"] = "auto"
+        clf = LogisticRegression(**lr_kwargs)
         clf.fit(X_train, y_train)
 
         feat_dim = model.classifier.weight.shape[1]
