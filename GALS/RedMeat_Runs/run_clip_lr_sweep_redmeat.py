@@ -20,9 +20,7 @@ _PENALTY_SOLVER_BASE_CHOICES = [
     ("l1", "saga", None),
     ("elasticnet", "saga", "suggest"),
 ]
-# Default to lbfgs-only for stability; liblinear has shown node-dependent
-# native crashes in this environment.
-_PENALTY_SOLVER_SPEC_DEFAULT = "l2:lbfgs"
+_PENALTY_SOLVER_SPEC_DEFAULT = "l2:lbfgs,l2:liblinear,l2:saga,l1:liblinear,l1:saga,elasticnet:saga"
 
 
 def _repo_root() -> Path:
@@ -265,22 +263,49 @@ def _parse_penalty_solver_choices(spec: str) -> List[Tuple[str, str, Optional[st
     return out
 
 
-def _choice_id(choice: Tuple[str, str, Optional[str]]) -> str:
-    penalty, solver, l1_ratio = choice
-    ratio_tag = "suggest" if l1_ratio == "suggest" else "none"
-    return f"{penalty}|{solver}|{ratio_tag}"
+def _parse_feature_modes(spec: str) -> List[str]:
+    allowed = {"l2", "raw", "zscore"}
+    out: List[str] = []
+    seen = set()
+    for tok in str(spec).split(","):
+        m = tok.strip().lower()
+        if not m:
+            continue
+        if m not in allowed:
+            raise ValueError(f"Unsupported feature mode '{m}'. Allowed: raw,l2,zscore")
+        if m in seen:
+            continue
+        seen.add(m)
+        out.append(m)
+    if not out:
+        raise ValueError("No valid feature modes parsed from --feature-modes.")
+    return out
 
 
-def _suggest_penalty_solver(
-    trial,
-    choice_ids: List[str],
-    choice_by_id: Dict[str, Tuple[str, str, Optional[str]]],
-) -> Tuple[str, str, Optional[float]]:
-    choice_id = str(trial.suggest_categorical("penalty_solver", choice_ids))
-    penalty, solver, l1_ratio = choice_by_id[choice_id]
-    if l1_ratio == "suggest":
-        l1_ratio = float(trial.suggest_float("l1_ratio", 0.05, 0.95))
-    return str(penalty), str(solver), l1_ratio
+def _parse_class_weight_choices(spec: str) -> List[Optional[str]]:
+    allowed = {"none", "balanced"}
+    out: List[Optional[str]] = []
+    seen = set()
+    for tok in str(spec).split(","):
+        v = tok.strip().lower()
+        if not v:
+            continue
+        if v not in allowed:
+            raise ValueError(f"Unsupported class weight option '{v}'. Allowed: none,balanced")
+        if v in seen:
+            continue
+        seen.add(v)
+        out.append(None if v == "none" else "balanced")
+    if not out:
+        raise ValueError("No valid class weight choices parsed from --class-weight-options.")
+    return out
+
+
+def _ensure_finite_contiguous(X: np.ndarray) -> np.ndarray:
+    X = np.ascontiguousarray(X, dtype=np.float64)
+    if not np.isfinite(X).all():
+        X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
+    return X
 
 
 def _sample_penalty_solver_random(rng: np.random.Generator, choices) -> Tuple[str, str, Optional[float]]:
@@ -296,28 +321,27 @@ def _run_trial(
     rng: np.random.Generator,
     args,
     num_classes: int,
-    X_train: np.ndarray,
+    X_train_by_mode: Dict[str, np.ndarray],
     y_train: np.ndarray,
-    X_val: np.ndarray,
+    X_val_by_mode: Dict[str, np.ndarray],
     y_val: np.ndarray,
-    X_test: np.ndarray,
+    X_test_by_mode: Dict[str, np.ndarray],
     y_test: np.ndarray,
 ):
     from sklearn.linear_model import LogisticRegression
 
     t0 = time.time()
-    if sampler == "random":
-        C = float(np.exp(rng.uniform(np.log(args.C_min), np.log(args.C_max))))
-        fit_intercept = bool(rng.integers(0, 2))
-        penalty, solver, l1_ratio = _sample_penalty_solver_random(rng, args.penalty_solver_choices)
-    else:
-        C = float(args.trial.suggest_float("C", args.C_min, args.C_max, log=True))
-        fit_intercept = bool(args.trial.suggest_categorical("fit_intercept", [True, False]))
-        penalty, solver, l1_ratio = _suggest_penalty_solver(
-            args.trial,
-            args.penalty_solver_ids,
-            args.penalty_solver_by_id,
-        )
+    # Uniform random sampling over the configured search space.
+    C = float(np.exp(rng.uniform(np.log(args.C_min), np.log(args.C_max))))
+    fit_intercept = bool(rng.integers(0, 2))
+    penalty, solver, l1_ratio = _sample_penalty_solver_random(rng, args.penalty_solver_choices)
+    feature_mode = str(args.feature_modes[int(rng.integers(0, len(args.feature_modes)))])
+    class_weight = args.class_weight_choices[int(rng.integers(0, len(args.class_weight_choices)))]
+    tol = float(np.exp(rng.uniform(np.log(args.tol_min), np.log(args.tol_max))))
+
+    X_train = X_train_by_mode[feature_mode]
+    X_val = X_val_by_mode[feature_mode]
+    X_test = X_test_by_mode[feature_mode]
 
     clf_kwargs = dict(
         random_state=args.seed,
@@ -326,6 +350,8 @@ def _run_trial(
         solver=solver,
         fit_intercept=fit_intercept,
         max_iter=args.max_iter,
+        tol=tol,
+        class_weight=class_weight,
         n_jobs=1,
         verbose=0,
     )
@@ -355,6 +381,9 @@ def _run_trial(
         "solver": solver,
         "l1_ratio": ("" if l1_ratio is None else float(l1_ratio)),
         "fit_intercept": fit_intercept,
+        "feature_mode": feature_mode,
+        "tol": tol,
+        "class_weight": ("none" if class_weight is None else str(class_weight)),
         "val_acc": val_acc,
         "val_avg_group_acc": val_avg_group,
         "val_worst_group_acc": val_worst_group,
@@ -379,18 +408,25 @@ def _run_fixed_params(
     penalty: str,
     solver: str,
     l1_ratio: Optional[float],
+    feature_mode: str,
+    tol: float,
+    class_weight: Optional[str],
     args,
     num_classes: int,
-    X_train: np.ndarray,
+    X_train_by_mode: Dict[str, np.ndarray],
     y_train: np.ndarray,
-    X_val: np.ndarray,
+    X_val_by_mode: Dict[str, np.ndarray],
     y_val: np.ndarray,
-    X_test: np.ndarray,
+    X_test_by_mode: Dict[str, np.ndarray],
     y_test: np.ndarray,
 ):
     from sklearn.linear_model import LogisticRegression
 
     t0 = time.time()
+    X_train = X_train_by_mode[feature_mode]
+    X_val = X_val_by_mode[feature_mode]
+    X_test = X_test_by_mode[feature_mode]
+
     clf_kwargs = dict(
         random_state=seed,
         C=C,
@@ -398,6 +434,8 @@ def _run_fixed_params(
         solver=solver,
         fit_intercept=fit_intercept,
         max_iter=args.max_iter,
+        tol=tol,
+        class_weight=class_weight,
         n_jobs=1,
         verbose=0,
     )
@@ -429,6 +467,9 @@ def _run_fixed_params(
         "solver": solver,
         "l1_ratio": ("" if l1_ratio is None else float(l1_ratio)),
         "fit_intercept": fit_intercept,
+        "feature_mode": feature_mode,
+        "tol": tol,
+        "class_weight": ("none" if class_weight is None else str(class_weight)),
         "val_acc": val_acc,
         "val_avg_group_acc": val_avg_group,
         "val_worst_group_acc": val_worst_group,
@@ -442,7 +483,9 @@ def _run_fixed_params(
 
 
 def main():
-    p = argparse.ArgumentParser(description="Optuna sweep for CLIP+LogReg on RedMeat (class-balanced metrics).")
+    p = argparse.ArgumentParser(
+        description="Random sweep for CLIP+LogReg on RedMeat (class-balanced metrics)."
+    )
     p.add_argument("data_path", help="Path to food-101-redmeat directory containing all_images.csv")
     p.add_argument("--clip-model", default="RN50", help='CLIP model name (e.g. "RN50", "ViT-B/32").')
     p.add_argument("--device", default="cuda", help='Torch device for CLIP feature extraction (e.g. "cuda", "cpu").')
@@ -451,10 +494,17 @@ def main():
     p.add_argument("--n-trials", type=int, default=100)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--output-csv", default="clip_lr_redmeat_sweep.csv")
-    p.add_argument("--sampler", choices=["tpe", "random"], default="tpe")
-    p.add_argument("--C-min", type=float, default=1e-2)
-    p.add_argument("--C-max", type=float, default=1e2)
+    p.add_argument(
+        "--sampler",
+        choices=["random", "tpe"],
+        default="random",
+        help="Sampling strategy (tpe is mapped to random for backward compatibility).",
+    )
+    p.add_argument("--C-min", type=float, default=1e-6)
+    p.add_argument("--C-max", type=float, default=1e6)
     p.add_argument("--max-iter", type=int, default=5000)
+    p.add_argument("--tol-min", type=float, default=1e-6)
+    p.add_argument("--tol-max", type=float, default=1e-1)
     p.add_argument(
         "--penalty-solvers",
         default=_PENALTY_SOLVER_SPEC_DEFAULT,
@@ -462,6 +512,16 @@ def main():
             "Comma-separated LogisticRegression penalty:solver pairs to search over. "
             "Allowed: l2:lbfgs,l2:liblinear,l2:saga,l1:liblinear,l1:saga,elasticnet:saga"
         ),
+    )
+    p.add_argument(
+        "--feature-modes",
+        default="l2,raw,zscore",
+        help="Comma-separated feature transforms to sample from. Allowed: raw,l2,zscore",
+    )
+    p.add_argument(
+        "--class-weight-options",
+        default="none,balanced",
+        help="Comma-separated class weight options to sample from. Allowed: none,balanced",
     )
     p.add_argument("--post-seeds", type=int, default=5)
     p.add_argument("--post-seed-start", type=int, default=0)
@@ -486,11 +546,16 @@ def main():
     )
 
     args = p.parse_args()
+    if args.sampler != "random":
+        print(
+            "[SWEEP] sampler=tpe requested, but this runner now uses uniform random search. "
+            "Proceeding with sampler=random."
+        )
+        args.sampler = "random"
+
     args.penalty_solver_choices = _parse_penalty_solver_choices(args.penalty_solvers)
-    args.penalty_solver_ids = [_choice_id(c) for c in args.penalty_solver_choices]
-    args.penalty_solver_by_id = {
-        cid: choice for cid, choice in zip(args.penalty_solver_ids, args.penalty_solver_choices)
-    }
+    args.feature_modes = _parse_feature_modes(args.feature_modes)
+    args.class_weight_choices = _parse_class_weight_choices(args.class_weight_options)
 
     class_list = [c.strip() for c in str(args.classes).split(",") if c.strip()] if args.classes else None
     classes, train_samples, val_samples, test_samples = _build_splits(
@@ -513,6 +578,9 @@ def main():
         "solver",
         "l1_ratio",
         "fit_intercept",
+        "feature_mode",
+        "tol",
+        "class_weight",
         "val_acc",
         "val_avg_group_acc",
         "val_worst_group_acc",
@@ -527,13 +595,6 @@ def main():
 
     rng = np.random.default_rng(args.seed)
     sweep_rows = []
-
-    if args.sampler == "tpe":
-        try:
-            import optuna  # noqa: F401
-        except Exception as exc:
-            print(f"[SWEEP] Optuna not available ({exc}); falling back to random search.")
-            args.sampler = "random"
 
     import torch
 
@@ -550,9 +611,31 @@ def main():
     print("[CLIP-LR] Extracting test features...")
     X_test, y_test = _extract_features(test_samples, model, preprocess, args.device, args.batch_size, args.num_workers)
 
-    X_train = np.ascontiguousarray(_l2_normalize(X_train), dtype=np.float64)
-    X_val = np.ascontiguousarray(_l2_normalize(X_val), dtype=np.float64)
-    X_test = np.ascontiguousarray(_l2_normalize(X_test), dtype=np.float64)
+    X_train_raw = _ensure_finite_contiguous(X_train)
+    X_val_raw = _ensure_finite_contiguous(X_val)
+    X_test_raw = _ensure_finite_contiguous(X_test)
+
+    X_train_by_mode: Dict[str, np.ndarray] = {}
+    X_val_by_mode: Dict[str, np.ndarray] = {}
+    X_test_by_mode: Dict[str, np.ndarray] = {}
+
+    if "raw" in args.feature_modes:
+        X_train_by_mode["raw"] = X_train_raw
+        X_val_by_mode["raw"] = X_val_raw
+        X_test_by_mode["raw"] = X_test_raw
+
+    if "l2" in args.feature_modes:
+        X_train_by_mode["l2"] = _ensure_finite_contiguous(_l2_normalize(X_train_raw))
+        X_val_by_mode["l2"] = _ensure_finite_contiguous(_l2_normalize(X_val_raw))
+        X_test_by_mode["l2"] = _ensure_finite_contiguous(_l2_normalize(X_test_raw))
+
+    if "zscore" in args.feature_modes:
+        from sklearn.preprocessing import StandardScaler
+
+        scaler = StandardScaler(with_mean=True, with_std=True)
+        X_train_by_mode["zscore"] = _ensure_finite_contiguous(scaler.fit_transform(X_train_raw))
+        X_val_by_mode["zscore"] = _ensure_finite_contiguous(scaler.transform(X_val_raw))
+        X_test_by_mode["zscore"] = _ensure_finite_contiguous(scaler.transform(X_test_raw))
 
     print("[CLIP-LR] Feature extraction complete. Starting LR sweep...")
     if "cuda" in args.device:
@@ -565,76 +648,35 @@ def main():
     def score(row: Dict) -> float:
         return float(row[args.objective])
 
-    if args.sampler == "random":
-        for trial_id in range(args.n_trials):
-            try:
-                row = _run_trial(
-                    trial_id,
-                    "random",
-                    rng,
-                    args,
-                    num_classes,
-                    X_train,
-                    y_train,
-                    X_val,
-                    y_val,
-                    X_test,
-                    y_test,
-                )
-            except Exception as exc:
-                print(f"[SWEEP] Trial {trial_id} failed: {exc}", flush=True)
-                continue
-            _write_row(args.output_csv, row, header)
-            sweep_rows.append(row)
-            if best_row is None or score(row) > score(best_row):
-                best_row = row
-            print(
-                f"[SWEEP] Trial {trial_id} done. "
-                f"val_acc={row['val_acc']:.2f} val_avg_group_acc={row['val_avg_group_acc']:.2f} "
-                f"test_acc={row['test_acc']:.2f} test_avg_group_acc={row['test_avg_group_acc']:.2f} "
-                f"(objective={args.objective}:{row[args.objective]:.4f} "
-                f"val_worst_group_acc={row['val_worst_group_acc']:.2f})"
+    for trial_id in range(args.n_trials):
+        try:
+            row = _run_trial(
+                trial_id,
+                "random",
+                rng,
+                args,
+                num_classes,
+                X_train_by_mode,
+                y_train,
+                X_val_by_mode,
+                y_val,
+                X_test_by_mode,
+                y_test,
             )
-    else:
-        import optuna
-
-        sampler = optuna.samplers.TPESampler(seed=args.seed)
-        study = optuna.create_study(direction="maximize", sampler=sampler)
-
-        def objective(trial):
-            nonlocal best_row
-            args.trial = trial
-            try:
-                row = _run_trial(
-                    trial.number,
-                    "tpe",
-                    rng,
-                    args,
-                    num_classes,
-                    X_train,
-                    y_train,
-                    X_val,
-                    y_val,
-                    X_test,
-                    y_test,
-                )
-            except Exception as exc:
-                print(f"[SWEEP] Trial {trial.number} failed: {exc}", flush=True)
-                return -1e12
-            _write_row(args.output_csv, row, header)
-            sweep_rows.append(row)
-            if best_row is None or score(row) > score(best_row):
-                best_row = row
-            print(
-                f"[SWEEP] Trial {trial.number} done. "
-                f"val_acc={row['val_acc']:.2f} val_avg_group_acc={row['val_avg_group_acc']:.2f} "
-                f"test_acc={row['test_acc']:.2f} test_avg_group_acc={row['test_avg_group_acc']:.2f} "
-                f"(objective={args.objective}:{row[args.objective]:.4f} "
-                f"val_worst_group_acc={row['val_worst_group_acc']:.2f})"
-            )
-            return score(row)
-
-        study.optimize(objective, n_trials=args.n_trials)
+        except Exception as exc:
+            print(f"[SWEEP] Trial {trial_id} failed: {exc}", flush=True)
+            continue
+        _write_row(args.output_csv, row, header)
+        sweep_rows.append(row)
+        if best_row is None or score(row) > score(best_row):
+            best_row = row
+        print(
+            f"[SWEEP] Trial {trial_id} done. "
+            f"val_acc={row['val_acc']:.2f} val_avg_group_acc={row['val_avg_group_acc']:.2f} "
+            f"test_acc={row['test_acc']:.2f} test_avg_group_acc={row['test_avg_group_acc']:.2f} "
+            f"(objective={args.objective}:{row[args.objective]:.4f} "
+            f"val_worst_group_acc={row['val_worst_group_acc']:.2f})"
+        )
 
     if best_row is not None:
         print("[SWEEP] Best trial:")
@@ -657,6 +699,9 @@ def main():
             "solver",
             "l1_ratio",
             "fit_intercept",
+            "feature_mode",
+            "tol",
+            "class_weight",
             "val_acc",
             "val_avg_group_acc",
             "val_worst_group_acc",
@@ -675,6 +720,13 @@ def main():
         best_penalty = str(best_row["penalty"])
         best_solver = str(best_row["solver"])
         best_fit_intercept = str(best_row["fit_intercept"]).lower() in ("1", "true", "yes")
+        best_feature_mode = str(best_row["feature_mode"])
+        best_tol = float(best_row["tol"])
+        best_class_weight_raw = best_row["class_weight"]
+        if best_class_weight_raw in ("", "none", "None", None):
+            best_class_weight = None
+        else:
+            best_class_weight = str(best_class_weight_raw)
         best_l1_ratio = best_row["l1_ratio"]
         if best_l1_ratio in ("", None):
             best_l1_ratio = None
@@ -694,13 +746,16 @@ def main():
                 penalty=best_penalty,
                 solver=best_solver,
                 l1_ratio=best_l1_ratio,
+                feature_mode=best_feature_mode,
+                tol=best_tol,
+                class_weight=best_class_weight,
                 args=args,
                 num_classes=num_classes,
-                X_train=X_train,
+                X_train_by_mode=X_train_by_mode,
                 y_train=y_train,
-                X_val=X_val,
+                X_val_by_mode=X_val_by_mode,
                 y_val=y_val,
-                X_test=X_test,
+                X_test_by_mode=X_test_by_mode,
                 y_test=y_test,
             )
             out_row["sweep_best_trial"] = int(best_row["trial"])

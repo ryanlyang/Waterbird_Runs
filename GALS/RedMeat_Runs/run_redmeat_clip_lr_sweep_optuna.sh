@@ -49,17 +49,20 @@ DATASET_ROOT="$DATA_ROOT/$DATA_DIR"
 
 N_TRIALS=${N_TRIALS:-25}
 SWEEP_SEED=${SWEEP_SEED:-1}
-SAMPLER=${SAMPLER:-tpe}
+SAMPLER=${SAMPLER:-random}
 CLIP_MODEL=${CLIP_MODEL:-RN50}
 BATCH_SIZE=${BATCH_SIZE:-256}
 # Keep 0 by default to avoid fork-related instability after CUDA feature extraction.
 NUM_WORKERS=${NUM_WORKERS:-0}
 OBJECTIVE=${OBJECTIVE:-val_avg_group_acc}
-C_MIN=${C_MIN:-1e-2}
-C_MAX=${C_MAX:-1e2}
+C_MIN=${C_MIN:-1e-6}
+C_MAX=${C_MAX:-1e6}
 MAX_ITER=${MAX_ITER:-5000}
-# Prefer lbfgs-only defaults; liblinear has shown sporadic native crashes on some nodes.
-PENALTY_SOLVERS=${PENALTY_SOLVERS:-l2:lbfgs}
+TOL_MIN=${TOL_MIN:-1e-6}
+TOL_MAX=${TOL_MAX:-1e-1}
+PENALTY_SOLVERS=${PENALTY_SOLVERS:-l2:lbfgs,l2:liblinear,l2:saga,l1:liblinear,l1:saga,elasticnet:saga}
+FEATURE_MODES=${FEATURE_MODES:-l2,raw,zscore}
+CLASS_WEIGHT_OPTIONS=${CLASS_WEIGHT_OPTIONS:-none,balanced}
 POST_SEEDS=${POST_SEEDS:-5}
 POST_SEED_START=${POST_SEED_START:-0}
 
@@ -81,7 +84,6 @@ if [[ ! -f CLIP/clip/bpe_simple_vocab_16e6.txt.gz ]]; then
     https://raw.githubusercontent.com/openai/CLIP/main/clip/bpe_simple_vocab_16e6.txt.gz
 fi
 
-python -c "import optuna" 2>/dev/null || { echo "[INFO] Installing optuna..."; pip install -q optuna; }
 python -c "import sklearn" 2>/dev/null || { echo "[INFO] Installing scikit-learn..."; pip install -q scikit-learn; }
 
 if [[ -z "${CUDA_VISIBLE_DEVICES:-}" ]]; then
@@ -94,6 +96,7 @@ echo "Data: $DATASET_ROOT"
 echo "CLIP model: $CLIP_MODEL"
 echo "Trials: $N_TRIALS (sampler=$SAMPLER seed=$SWEEP_SEED objective=$OBJECTIVE)"
 echo "Penalty/solvers: $PENALTY_SOLVERS"
+echo "Feature modes: $FEATURE_MODES | class weights: $CLASS_WEIGHT_OPTIONS | tol=[$TOL_MIN,$TOL_MAX]"
 echo "Output CSV: $OUT_CSV"
 echo "Post seeds: $POST_SEEDS (start=$POST_SEED_START)"
 echo "Post output CSV: $POST_OUT_CSV"
@@ -111,8 +114,12 @@ srun --unbuffered python -u RedMeat_Runs/run_clip_lr_sweep_redmeat.py \
   --sampler "$SAMPLER" \
   --C-min "$C_MIN" \
   --C-max "$C_MAX" \
+  --tol-min "$TOL_MIN" \
+  --tol-max "$TOL_MAX" \
   --max-iter "$MAX_ITER" \
   --penalty-solvers "$PENALTY_SOLVERS" \
+  --feature-modes "$FEATURE_MODES" \
+  --class-weight-options "$CLASS_WEIGHT_OPTIONS" \
   --objective "$OBJECTIVE" \
   --post-seeds "$POST_SEEDS" \
   --post-seed-start "$POST_SEED_START" \
