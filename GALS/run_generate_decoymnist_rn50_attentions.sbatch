@@ -14,11 +14,35 @@ set -Eeuo pipefail
 
 # -------- Paths / env (override via --export=ALL,VAR=...) --------
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="${REPO_ROOT:-$SCRIPT_DIR}"
-PNG_ROOT="${PNG_ROOT:-$SCRIPT_DIR/../MakeMNIST/data/DecoyMNIST_png}"
+SUBMIT_DIR="${SLURM_SUBMIT_DIR:-${SBATCH_SUBMIT_DIR:-${PWD:-}}}"
+REPO_ROOT_INPUT="${REPO_ROOT:-}"
+
+# NOTE: Under Slurm, BASH_SOURCE may point to a spool copy path.
+# Resolve repo root from submit dir first, then fall back.
+REPO_ROOT_CANDIDATES=(
+  "$REPO_ROOT_INPUT"
+  "$SUBMIT_DIR/GALS"
+  "$SUBMIT_DIR"
+  "$SCRIPT_DIR"
+)
+REPO_ROOT=""
+for candidate in "${REPO_ROOT_CANDIDATES[@]}"; do
+  if [[ -n "$candidate" && -f "$candidate/run_generate_decoymnist_rn50_attentions.py" ]]; then
+    REPO_ROOT="$(cd -- "$candidate" && pwd)"
+    break
+  fi
+done
+if [[ -z "$REPO_ROOT" ]]; then
+  echo "[ERROR] Could not locate GALS repo root containing run_generate_decoymnist_rn50_attentions.py" >&2
+  echo "Checked: ${REPO_ROOT_CANDIDATES[*]}" >&2
+  exit 2
+fi
+
+PNG_ROOT="${PNG_ROOT:-$REPO_ROOT/../MakeMNIST/data/DecoyMNIST_png}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-$PNG_ROOT/clip_rn50_attention_gradcam}"
 LOG_DIR="${LOG_DIR:-/home/ryreu/guided_cnn/logsMNIST}"
 CONDA_ENV="${CONDA_ENV:-gals_a100}"
+CLIP_DIR="${CLIP_DIR:-$REPO_ROOT/CLIP}"
 
 SPLITS="${SPLITS:-train,test}"
 CHUNK_SIZE="${CHUNK_SIZE:-0}"    # 0 => run all at once
@@ -52,10 +76,10 @@ fi
 mkdir -p "$OUTPUT_ROOT"
 
 # CLIP tokenizer file helper (same pattern as other GALS scripts).
-mkdir -p CLIP/clip
-if [[ ! -f CLIP/clip/bpe_simple_vocab_16e6.txt.gz ]]; then
+mkdir -p "$CLIP_DIR/clip"
+if [[ ! -f "$CLIP_DIR/clip/bpe_simple_vocab_16e6.txt.gz" ]]; then
   echo "[INFO] Downloading CLIP BPE vocab..."
-  curl -L -o CLIP/clip/bpe_simple_vocab_16e6.txt.gz \
+  curl -L -o "$CLIP_DIR/clip/bpe_simple_vocab_16e6.txt.gz" \
     https://raw.githubusercontent.com/openai/CLIP/main/clip/bpe_simple_vocab_16e6.txt.gz
 fi
 
@@ -64,7 +88,10 @@ if [[ -z "${CUDA_VISIBLE_DEVICES:-}" ]]; then
 fi
 
 echo "[$(date)] Host: $(hostname)"
+echo "SCRIPT_DIR: $SCRIPT_DIR"
+echo "SLURM_SUBMIT_DIR: ${SLURM_SUBMIT_DIR:-<unset>}"
 echo "Repo: $REPO_ROOT"
+echo "CLIP_DIR: $CLIP_DIR"
 echo "PNG_ROOT: $PNG_ROOT"
 echo "OUTPUT_ROOT: $OUTPUT_ROOT"
 echo "SPLITS: $SPLITS"
