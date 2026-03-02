@@ -29,6 +29,7 @@ GRAD_CRITERION="${GRAD_CRITERION:-L1}"
 EPOCHS="${EPOCHS:-19}"
 N_SEEDS="${N_SEEDS:-5}"
 SEED_START="${SEED_START:-0}"
+NUM_WORKERS="${NUM_WORKERS:-0}"
 
 mkdir -p "${LOG_DIR}"
 
@@ -47,7 +48,7 @@ which python
 echo "Repo: ${REPO_ROOT}"
 echo "Data: ${DATA_PATH}"
 echo "Masks: ${MASK_PATH}"
-echo "epochs=${EPOCHS} lr=${LR} wd=${WEIGHT_DECAY} grad_weight=${GRAD_WEIGHT} grad_criterion=${GRAD_CRITERION}"
+echo "epochs=${EPOCHS} lr=${LR} wd=${WEIGHT_DECAY} grad_weight=${GRAD_WEIGHT} grad_criterion=${GRAD_CRITERION} num_workers=${NUM_WORKERS}"
 
 python -u run_decoymnist_rrr_fixed.py \
   --png-root "${DATA_PATH}" \
@@ -59,4 +60,4 @@ python -u run_decoymnist_rrr_fixed.py \
   --weight-decay "${WEIGHT_DECAY}" \
   --grad-weight "${GRAD_WEIGHT}" \
   --grad-criterion "${GRAD_CRITERION}" \
-  --num-workers "${SLURM_CPUS_PER_TASK:-1}"
+  --num-workers "${NUM_WORKERS}"
