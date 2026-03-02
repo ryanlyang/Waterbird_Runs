@@ -1,8 +1,8 @@
 #!/bin/bash -l
 #SBATCH --account=reu-aisocial
-#SBATCH --partition=debug
+#SBATCH --partition=tier3
 #SBATCH --gres=gpu:1
-#SBATCH --time=12:00:00
+#SBATCH --time=20:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
