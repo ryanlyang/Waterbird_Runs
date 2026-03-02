@@ -61,11 +61,11 @@ CLIP_MODEL=${CLIP_MODEL:-RN50}
 TUNE_MODE=${TUNE_MODE:-layer4_head}
 PRETRAINED=${PRETRAINED:-1}
 
-# CLIP-friendly defaults (override via --export=ALL,... if needed).
-BASE_LR_MIN=${BASE_LR_MIN:-3e-6}
-BASE_LR_MAX=${BASE_LR_MAX:-3e-4}
-CLS_LR_MIN=${CLS_LR_MIN:-1e-4}
-CLS_LR_MAX=${CLS_LR_MAX:-3e-2}
+# Match vanilla CNN sweep LR ranges.
+BASE_LR_MIN=${BASE_LR_MIN:-1e-5}
+BASE_LR_MAX=${BASE_LR_MAX:-5e-2}
+CLS_LR_MIN=${CLS_LR_MIN:-1e-5}
+CLS_LR_MAX=${CLS_LR_MAX:-5e-2}
 WEIGHT_DECAY=${WEIGHT_DECAY:-1e-5}
 MOMENTUM_MIN=${MOMENTUM_MIN:-0.85}
 MOMENTUM_MAX=${MOMENTUM_MAX:-0.95}
@@ -129,4 +129,3 @@ if [[ "$NESTEROV" -eq 1 ]]; then
 fi
 
 srun --unbuffered python -u RedMeat_Runs/run_vanilla_redmeat_sweep.py "${ARGS[@]}"
-
