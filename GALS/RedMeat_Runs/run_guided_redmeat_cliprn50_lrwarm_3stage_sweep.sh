@@ -38,7 +38,29 @@ fi
 source "$COMMON_ENV"
 
 redmeat_set_defaults
-redmeat_activate_env
+
+# Cluster defaults are populated by common_env.sh, but allow easy local/RunPod
+# overrides before activation.
+if [[ -d /workspace/Waterbird_Runs/GALS ]]; then
+  export PROJECT_ROOT="${PROJECT_ROOT:-/workspace/Waterbird_Runs}"
+  export GALS_ROOT="${GALS_ROOT:-/workspace/Waterbird_Runs/GALS}"
+fi
+if [[ -d /workspace/data/food-101-redmeat ]]; then
+  export DATA_ROOT="${DATA_ROOT:-/workspace/data}"
+  export DATA_DIR="${DATA_DIR:-food-101-redmeat}"
+fi
+export LOG_DIR="${LOG_DIR:-/workspace/logsRedMeat}"
+mkdir -p "$LOG_DIR"
+
+if [[ "${SKIP_ENV_ACTIVATE:-0}" == "1" ]]; then
+  echo "[INFO] SKIP_ENV_ACTIVATE=1 -> using current Python environment."
+elif [[ -n "${VIRTUAL_ENV:-}" ]]; then
+  echo "[INFO] Using active virtualenv: $VIRTUAL_ENV"
+elif [[ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]]; then
+  redmeat_activate_env
+else
+  echo "[WARN] No conda found; using current Python environment."
+fi
 
 REPO_ROOT="$PROJECT_ROOT"
 GALS_REPO="$GALS_ROOT"
@@ -60,14 +82,17 @@ LR_SOLVER=${LR_SOLVER:-lbfgs}
 LR_FIT_INTERCEPT=${LR_FIT_INTERCEPT:-0}
 LR_MAX_ITER=${LR_MAX_ITER:-5000}
 
-SWEEP_OUT=${SWEEP_OUT:-$LOG_DIR/guided_redmeat_cliprn50_lrwarm_3stage_sweep_${SLURM_JOB_ID}.csv}
-POST_OUT=${POST_OUT:-$LOG_DIR/guided_redmeat_cliprn50_lrwarm_3stage_best${POST_SEEDS}_${SLURM_JOB_ID}.csv}
+RUN_ID="${SLURM_JOB_ID:-local_$(date +%Y%m%d_%H%M%S)}"
+SWEEP_OUT=${SWEEP_OUT:-$LOG_DIR/guided_redmeat_cliprn50_lrwarm_3stage_sweep_${RUN_ID}.csv}
+POST_OUT=${POST_OUT:-$LOG_DIR/guided_redmeat_cliprn50_lrwarm_3stage_best${POST_SEEDS}_${RUN_ID}.csv}
 
 export CUBLAS_WORKSPACE_CONFIG=:4096:8
 export SAVE_CHECKPOINTS=${SAVE_CHECKPOINTS:-0}
-export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
-export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
-export NUMEXPR_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
+CPU_COUNT="${SLURM_CPUS_PER_TASK:-${CPU_COUNT:-16}}"
+export OMP_NUM_THREADS="$CPU_COUNT"
+export MKL_NUM_THREADS="$CPU_COUNT"
+export NUMEXPR_NUM_THREADS="$CPU_COUNT"
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 
 cd "$GALS_REPO"
 export PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}"
@@ -121,5 +146,10 @@ if [[ "$POST_SEEDS" -gt 0 ]]; then
   ARGS+=(--post-seeds "$POST_SEEDS" --post-seed-start "$POST_SEED_START" --post-output-csv "$POST_OUT")
 fi
 
-srun --unbuffered python -u RedMeat_Runs/run_guided_redmeat_cliprn50_lrwarm_3stage_sweep.py "${ARGS[@]}"
+if [[ -n "${SLURM_JOB_ID:-}" ]] && command -v srun >/dev/null 2>&1; then
+  RUNNER=(srun --unbuffered python -u)
+else
+  RUNNER=(python -u)
+fi
 
+"${RUNNER[@]}" RedMeat_Runs/run_guided_redmeat_cliprn50_lrwarm_3stage_sweep.py "${ARGS[@]}"
