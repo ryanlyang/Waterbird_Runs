@@ -593,8 +593,7 @@ def main():
                 f"val_acc={row['val_acc']:.2f} val_avg_group_acc={row['val_avg_group_acc']:.2f} "
                 f"test_acc={row['test_acc']:.2f} test_avg_group_acc={row['test_avg_group_acc']:.2f} "
                 f"(objective={args.objective}:{row[args.objective]:.4f} "
-                f"val_worst_group_acc={row['val_worst_group_acc']:.2f} "
-                f"test_worst_group_acc={row['test_worst_group_acc']:.2f})"
+                f"val_worst_group_acc={row['val_worst_group_acc']:.2f})"
             )
     else:
         import optuna
@@ -631,8 +630,7 @@ def main():
                 f"val_acc={row['val_acc']:.2f} val_avg_group_acc={row['val_avg_group_acc']:.2f} "
                 f"test_acc={row['test_acc']:.2f} test_avg_group_acc={row['test_avg_group_acc']:.2f} "
                 f"(objective={args.objective}:{row[args.objective]:.4f} "
-                f"val_worst_group_acc={row['val_worst_group_acc']:.2f} "
-                f"test_worst_group_acc={row['test_worst_group_acc']:.2f})"
+                f"val_worst_group_acc={row['val_worst_group_acc']:.2f})"
             )
             return score(row)
 
@@ -714,8 +712,7 @@ def main():
                 f"[POST] seed={s} "
                 f"val_acc={out_row['val_acc']:.2f} val_avg_group_acc={out_row['val_avg_group_acc']:.2f} "
                 f"test_acc={out_row['test_acc']:.2f} test_avg_group_acc={out_row['test_avg_group_acc']:.2f} "
-                f"(objective={args.objective}:{out_row[args.objective]:.4f} "
-                f"test_worst_group_acc={out_row['test_worst_group_acc']:.2f})"
+                f"(objective={args.objective}:{out_row[args.objective]:.4f})"
             )
 
         _print_metric_mean_std(
