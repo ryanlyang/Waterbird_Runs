@@ -137,7 +137,7 @@ def add_completed_trials_to_study(study, rows, args):
 
     added = 0
     for row in rows:
-        value = row.get("best_balanced_val_acc")
+        value = row.get(args.objective)
         if value is None:
             continue
         params = {
@@ -160,6 +160,13 @@ def add_completed_trials_to_study(study, rows, args):
         except Exception as exc:
             print(f"[RESUME] Skipping study restore for trial {row.get('trial')}: {exc}")
     return added
+
+
+def objective_value(row, objective_name):
+    v = row.get(objective_name)
+    if v is None:
+        return None
+    return float(v)
 
 
 def print_runtime_summary(tag, rows, num_epochs):
@@ -286,6 +293,15 @@ def main():
     p.add_argument("--lr2-mult-min", type=float, default=1e-1)
     p.add_argument("--lr2-mult-max", type=float, default=3.0)
     p.add_argument("--sampler", choices=["tpe", "random"], default="tpe")
+    p.add_argument(
+        "--objective",
+        choices=["best_balanced_val_acc", "test_acc", "per_group", "worst_group"],
+        default="best_balanced_val_acc",
+        help=(
+            "Sweep objective to maximize. "
+            "Note: test-based objectives are for diagnostics only and leak test information into tuning."
+        ),
+    )
     p.add_argument("--model-name", choices=["resnet50", "clip_rn50"], default="resnet50")
     p.add_argument("--clip-model", default="RN50", help="Used when --model-name clip_rn50.")
     p.add_argument("--tune-mode", choices=["full", "layer4_head", "linear_probe"], default="full")
@@ -358,6 +374,12 @@ def main():
         except Exception as exc:
             print(f"[SWEEP] Optuna not available ({exc}); falling back to random search.")
             args.sampler = "random"
+    if args.objective != "best_balanced_val_acc":
+        print(
+            f"[WARN] objective={args.objective} selected. This uses non-validation metrics for tuning "
+            "and is not a fair model-selection protocol.",
+            flush=True,
+        )
 
     best_row = None
     sweep_rows = []
@@ -367,8 +389,10 @@ def main():
         resume_rows, completed_trial_ids = load_resume_rows(args.resume_csv, args.n_trials)
         sweep_rows.extend(resume_rows)
         for row in resume_rows:
-            score = row.get("best_balanced_val_acc")
-            if score is not None and (best_row is None or score > best_row["best_balanced_val_acc"]):
+            score = objective_value(row, args.objective)
+            if score is not None and (
+                best_row is None or score > objective_value(best_row, args.objective)
+            ):
                 best_row = row
         print(
             f"[RESUME] Loaded {len(resume_rows)} completed trials from {args.resume_csv}. "
@@ -383,9 +407,17 @@ def main():
             row = run_trial(trial_id, args, rng, "random")
             write_row(args.output_csv, row, header)
             sweep_rows.append(row)
-            if best_row is None or row["best_balanced_val_acc"] > best_row["best_balanced_val_acc"]:
+            cur_obj = objective_value(row, args.objective)
+            best_obj = objective_value(best_row, args.objective) if best_row is not None else None
+            if best_row is None or (cur_obj is not None and best_obj is not None and cur_obj > best_obj):
                 best_row = row
-            print(f"[SWEEP] Trial {trial_id} done. best_balanced_val_acc={row['best_balanced_val_acc']:.4f}")
+            print(
+                f"[SWEEP] Trial {trial_id} done. "
+                f"best_balanced_val_acc={row['best_balanced_val_acc']:.4f} "
+                f"test_acc={row['test_acc']:.2f}% "
+                f"objective({args.objective})={objective_value(row, args.objective):.4f}",
+                flush=True,
+            )
     else:
         import optuna
         from optuna.trial import TrialState
@@ -409,18 +441,26 @@ def main():
             except Exception:
                 study.tell(trial, state=TrialState.FAIL)
                 raise
-            value = row.get("best_balanced_val_acc")
+            value = objective_value(row, args.objective)
             if value is None:
                 study.tell(trial, state=TrialState.FAIL)
                 raise RuntimeError(
-                    f"Trial {trial_id} returned no best_balanced_val_acc; cannot continue TPE."
+                    f"Trial {trial_id} returned no objective value for {args.objective}; cannot continue TPE."
                 )
             write_row(args.output_csv, row, header)
             sweep_rows.append(row)
             study.tell(trial, float(value))
-            if best_row is None or row["best_balanced_val_acc"] > best_row["best_balanced_val_acc"]:
+            cur_obj = objective_value(row, args.objective)
+            best_obj = objective_value(best_row, args.objective) if best_row is not None else None
+            if best_row is None or (cur_obj is not None and best_obj is not None and cur_obj > best_obj):
                 best_row = row
-            print(f"[SWEEP] Trial {trial_id} done. best_balanced_val_acc={row['best_balanced_val_acc']:.4f}")
+            print(
+                f"[SWEEP] Trial {trial_id} done. "
+                f"best_balanced_val_acc={row['best_balanced_val_acc']:.4f} "
+                f"test_acc={row['test_acc']:.2f}% "
+                f"objective({args.objective})={float(value):.4f}",
+                flush=True,
+            )
 
     if best_row is None:
         raise RuntimeError("No successful trials completed")
