@@ -589,8 +589,12 @@ def main():
             if best_row is None or score(row) > score(best_row):
                 best_row = row
             print(
-                f"[SWEEP] Trial {trial_id} done. {args.objective}={row[args.objective]:.4f} "
-                f"(val_worst_group_acc={row['val_worst_group_acc']:.2f} test_worst_group_acc={row['test_worst_group_acc']:.2f})"
+                f"[SWEEP] Trial {trial_id} done. "
+                f"val_acc={row['val_acc']:.2f} val_avg_group_acc={row['val_avg_group_acc']:.2f} "
+                f"test_acc={row['test_acc']:.2f} test_avg_group_acc={row['test_avg_group_acc']:.2f} "
+                f"(objective={args.objective}:{row[args.objective]:.4f} "
+                f"val_worst_group_acc={row['val_worst_group_acc']:.2f} "
+                f"test_worst_group_acc={row['test_worst_group_acc']:.2f})"
             )
     else:
         import optuna
@@ -623,8 +627,12 @@ def main():
             if best_row is None or score(row) > score(best_row):
                 best_row = row
             print(
-                f"[SWEEP] Trial {trial.number} done. {args.objective}={row[args.objective]:.4f} "
-                f"(val_worst_group_acc={row['val_worst_group_acc']:.2f} test_worst_group_acc={row['test_worst_group_acc']:.2f})"
+                f"[SWEEP] Trial {trial.number} done. "
+                f"val_acc={row['val_acc']:.2f} val_avg_group_acc={row['val_avg_group_acc']:.2f} "
+                f"test_acc={row['test_acc']:.2f} test_avg_group_acc={row['test_avg_group_acc']:.2f} "
+                f"(objective={args.objective}:{row[args.objective]:.4f} "
+                f"val_worst_group_acc={row['val_worst_group_acc']:.2f} "
+                f"test_worst_group_acc={row['test_worst_group_acc']:.2f})"
             )
             return score(row)
 
@@ -703,8 +711,11 @@ def main():
             _write_row(post_csv, out_row, post_header)
             post_rows.append(out_row)
             print(
-                f"[POST] seed={s} {args.objective}={out_row[args.objective]:.4f} "
-                f"(test_worst_group_acc={out_row['test_worst_group_acc']:.2f})"
+                f"[POST] seed={s} "
+                f"val_acc={out_row['val_acc']:.2f} val_avg_group_acc={out_row['val_avg_group_acc']:.2f} "
+                f"test_acc={out_row['test_acc']:.2f} test_avg_group_acc={out_row['test_avg_group_acc']:.2f} "
+                f"(objective={args.objective}:{out_row[args.objective]:.4f} "
+                f"test_worst_group_acc={out_row['test_worst_group_acc']:.2f})"
             )
 
         _print_metric_mean_std(
