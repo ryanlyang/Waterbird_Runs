@@ -8,7 +8,7 @@
 #   sbatch --export=ALL,GAMMA=4.0,REG_COEFF=0.0,SEEDS=0,1,2,3,4 run_decoymnist_afr_fixed.sbatch
 
 #SBATCH --account=reu-aisocial
-#SBATCH --partition=debug
+#SBATCH --partition=tier3
 #SBATCH --gres=gpu:1
 #SBATCH --time=6:00:00
 #SBATCH --ntasks=1
