@@ -64,6 +64,20 @@ export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export NUMEXPR_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export PYTHONNOUSERSITE=1
 
+# Ensure runtime deps used by utils/rise.py + saliency rendering are present.
+python -c "import skimage" 2>/dev/null || {
+  echo "[INFO] Installing scikit-image..."
+  pip install -q scikit-image
+}
+python -c "import cv2" 2>/dev/null || {
+  echo "[INFO] Installing opencv-python..."
+  pip install -q opencv-python
+}
+python -c "import tqdm" 2>/dev/null || {
+  echo "[INFO] Installing tqdm..."
+  pip install -q tqdm
+}
+
 cd "${REPO_ROOT}"
 
 echo "[$(date)] Host: $(hostname)"
@@ -115,4 +129,3 @@ if [[ -n "${SLURM_JOB_ID:-}" ]]; then
 else
   "${CMD[@]}"
 fi
-
