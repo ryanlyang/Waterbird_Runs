@@ -18,6 +18,7 @@ import argparse
 import csv
 import json
 import os
+import pickle
 import random
 import re
 from datetime import datetime
@@ -103,6 +104,28 @@ def save_gray(path: Path, arr: np.ndarray) -> None:
 
 def resize_map(norm_map: np.ndarray, width: int, height: int) -> np.ndarray:
     return cv2.resize(norm_map, (width, height), interpolation=cv2.INTER_LINEAR)
+
+
+def torch_load_compat(path: Path, device: torch.device):
+    """
+    PyTorch >=2.6 defaults torch.load(..., weights_only=True), which can fail on
+    legacy checkpoint payloads. Retry with weights_only=False for trusted files.
+    """
+    try:
+        return torch.load(path, map_location=device)
+    except (pickle.UnpicklingError, RuntimeError) as exc:
+        msg = str(exc)
+        if "Weights only load failed" not in msg:
+            raise
+        print(
+            f"[WARN] weights_only load failed for {path}. Retrying with weights_only=False.",
+            flush=True,
+        )
+        try:
+            return torch.load(path, map_location=device, weights_only=False)
+        except TypeError:
+            # Older torch versions may not support the weights_only kwarg.
+            return torch.load(path, map_location=device)
 
 
 def extract_state_dict(ckpt_obj: object) -> Dict[str, torch.Tensor]:
@@ -366,7 +389,7 @@ def load_guided_model(guided_ckpt: Path, num_classes: int, device: torch.device)
         pretrained=True,
         clip_model="RN50",
     ).to(device)
-    state = torch.load(guided_ckpt, map_location=device)
+    state = torch_load_compat(guided_ckpt, device)
     if isinstance(state, dict) and "model_state_dict" in state:
         state = state["model_state_dict"]
     model.load_state_dict(state, strict=True)
@@ -376,7 +399,7 @@ def load_guided_model(guided_ckpt: Path, num_classes: int, device: torch.device)
 
 def load_vanilla_model(vanilla_ckpt: Path, num_classes: int, device: torch.device) -> nn.Module:
     model = rvm.make_model("resnet50", num_classes, pretrained=True, clip_model="RN50").to(device)
-    state = torch.load(vanilla_ckpt, map_location=device)
+    state = torch_load_compat(vanilla_ckpt, device)
     if isinstance(state, dict) and "model_state_dict" in state:
         state = state["model_state_dict"]
     model.load_state_dict(state, strict=True)
@@ -386,7 +409,7 @@ def load_vanilla_model(vanilla_ckpt: Path, num_classes: int, device: torch.devic
 
 def load_gals_model(gals_ckpt: Path, num_classes: int, device: torch.device) -> GALSResnet50CAM:
     model = GALSResnet50CAM(num_classes=num_classes).to(device)
-    ckpt = torch.load(gals_ckpt, map_location=device)
+    ckpt = torch_load_compat(gals_ckpt, device)
     state = extract_state_dict(ckpt)
     state = align_state_dict_keys(state, model)
     missing, unexpected = model.load_state_dict(state, strict=False)
