@@ -51,7 +51,7 @@ ALT_GT_ROOT_1=${ALT_GT_ROOT_1:-/home/ryreu/guided_cnn/Food101/LearningToLook/cod
 ALT_GT_ROOT_2=${ALT_GT_ROOT_2:-/home/ryreu/guided_cnn/Food101/LearningToLook/code/WeCLIPPlus/results_redmeat_openai_xcit/val/prediction_cmap/}
 ALT_GT_ROOT_3=${ALT_GT_ROOT_3:-/home/ryreu/guided_cnn/Food101/LearningToLook/code/WeCLIPPlus/results_redmeat_siglip2_dinovit/val/prediction_cmap/}
 
-N_TRIALS=${N_TRIALS:-50}
+N_TRIALS=${N_TRIALS:-150}
 SWEEP_SEED=${SWEEP_SEED:-0}
 SAMPLER=${SAMPLER:-tpe}
 POST_SEEDS=${POST_SEEDS:-5}
@@ -134,4 +134,3 @@ srun --unbuffered python -u RedMeat_Runs/run_guided_redmeat_sweep.py \
   --post-output-csv "$POST_OUT" \
   "${MODEL_ARGS[@]}" \
   "${ALT_ARGS[@]}"
-
