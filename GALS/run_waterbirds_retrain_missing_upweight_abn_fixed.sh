@@ -7,11 +7,11 @@
 # - abn_cls WB100
 
 #SBATCH --account=reu-aisocial
-#SBATCH --partition=debug
+#SBATCH --partition=tier3
 #SBATCH --gres=gpu:a100:1
 #SBATCH --time=23:00:00
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=2
 #SBATCH --mem=32G
 #SBATCH --output=/home/ryreu/guided_cnn/logsWaterbird/retrain_missing_upweight_abn_%j.out
 #SBATCH --error=/home/ryreu/guided_cnn/logsWaterbird/retrain_missing_upweight_abn_%j.err
