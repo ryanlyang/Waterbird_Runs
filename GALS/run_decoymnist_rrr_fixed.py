@@ -23,6 +23,7 @@ import torch.optim as optim
 import torch.utils.data as utils
 from torchvision.datasets import ImageFolder
 from torchvision.transforms import Compose, Grayscale, Lambda, ToTensor
+from tqdm.auto import tqdm
 
 
 class Net(nn.Module):
@@ -161,7 +162,16 @@ def train_one_seed(args, seed: int, full_train: GuidedImageFolder, test_dataset:
 
     for epoch in range(1, args.epochs + 1):
         model.train()
-        for data, target, gt_mask in train_loader:
+        epoch_iter = train_loader
+        if not args.no_progress_bar:
+            epoch_iter = tqdm(
+                train_loader,
+                desc=f"seed={seed} epoch={epoch}/{args.epochs}",
+                leave=False,
+                dynamic_ncols=True,
+            )
+
+        for data, target, gt_mask in epoch_iter:
             data = data.to(device)
             target = target.to(device)
             gt_mask = gt_mask.to(device)
@@ -178,6 +188,9 @@ def train_one_seed(args, seed: int, full_train: GuidedImageFolder, test_dataset:
 
             loss.backward()
             optimizer.step()
+
+            if not args.no_progress_bar:
+                epoch_iter.set_postfix(loss=f"{float(loss.item()):.4f}")
 
         val_loss, val_acc = evaluate(model, val_loader, device)
         improved = (val_acc > best_val_acc) or (val_acc == best_val_acc and val_loss < best_val_loss)
@@ -222,6 +235,7 @@ def main() -> None:
     parser.add_argument("--seed-start", type=int, default=0)
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--print-every", type=int, default=1)
+    parser.add_argument("--no-progress-bar", action="store_true", default=False)
     parser.add_argument("--no-cuda", action="store_true", default=False)
     args = parser.parse_args()
 
