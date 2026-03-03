@@ -75,11 +75,11 @@ def _load_attention_map(path: Path) -> torch.Tensor:
         raise ValueError(f"Could not parse attention payload at: {path}")
 
     att = torch.as_tensor(arr, dtype=torch.float32)
-    while att.ndim > 2:
-        if att.ndim == 3:
-            att = att.max(dim=0).values
-        else:
-            att = att.squeeze(0)
+    # Collapse any leading dims (e.g. num_prompts x 1 x H x W) into a single
+    # stack and reduce to one 2D map. This avoids shape-dependent infinite
+    # loops when the first dim is >1.
+    if att.ndim > 2:
+        att = att.reshape(-1, att.shape[-2], att.shape[-1]).max(dim=0).values
     if att.ndim != 2:
         raise ValueError(f"Expected 2D attention after reduction, got shape {tuple(att.shape)} at {path}")
 
