@@ -4,7 +4,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --time=20:00:00
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=16
 #SBATCH --mem=32G
 #SBATCH --output=/home/ryreu/guided_cnn/logsMNIST/decoy_rrr_fixed_trial40_%j.out
 #SBATCH --error=/home/ryreu/guided_cnn/logsMNIST/decoy_rrr_fixed_trial40_%j.err
