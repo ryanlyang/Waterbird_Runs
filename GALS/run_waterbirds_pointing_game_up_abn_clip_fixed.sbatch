@@ -10,8 +10,8 @@
 #SBATCH --gres=gpu:a100:1
 #SBATCH --time=06:00:00
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=64G
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=32G
 #SBATCH --output=/home/ryreu/guided_cnn/logsWaterbird/pointing_game_up_abn_clip_fixed_%j.out
 #SBATCH --error=/home/ryreu/guided_cnn/logsWaterbird/pointing_game_up_abn_clip_fixed_%j.err
 
