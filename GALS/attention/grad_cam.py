@@ -5,7 +5,7 @@ http://kazuto1011.github.io
 https://github.com/kazuto1011/grad-cam-pytorch
 """
 
-from collections import OrderedDict, Sequence
+from collections import OrderedDict
 import numpy as np
 import torch
 import torch.nn as nn
@@ -139,4 +139,3 @@ class GradCAM(_BaseWrapper):
         gcam = gcam.view(B, C, H, W)
 
         return gcam
-
