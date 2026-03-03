@@ -35,9 +35,10 @@ GUIDED_GT_ROOT=${GUIDED_GT_ROOT:-/home/ryreu/guided_cnn/waterbirds/L100/Learning
 OUT_DIR_DEFAULT="${LOG_ROOT}/wb100_guided_vanilla_gals_saliency_${SLURM_JOB_ID:-local_$(date +%Y%m%d_%H%M%S)}"
 OUT_DIR=${OUT_DIR:-$OUT_DIR_DEFAULT}
 
-NUM_VAL_SAMPLES=${NUM_VAL_SAMPLES:-500}
+NUM_VAL_SAMPLES=${NUM_VAL_SAMPLES:-200}
 SAMPLE_SEED=${SAMPLE_SEED:-0}
-SAMPLE_STRATEGY=${SAMPLE_STRATEGY:-waterbird_guided_miscls_or_guided_hit_other_fail}
+SAMPLE_SPLIT=${SAMPLE_SPLIT:-train}
+SAMPLE_STRATEGY=${SAMPLE_STRATEGY:-waterbird_guided_hit_vanilla_fail}
 TARGET_CLASS=${TARGET_CLASS:-label}
 SALIENCY_METHOD=${SALIENCY_METHOD:-rise}
 RISE_NUM_MASKS=${RISE_NUM_MASKS:-2000}
@@ -109,7 +110,7 @@ echo "Repo: $REPO_ROOT"
 echo "Data: $DATA_PATH"
 echo "Guided GT root: $GUIDED_GT_ROOT"
 echo "Output dir: $OUT_DIR"
-echo "Num val samples: $NUM_VAL_SAMPLES (seed=$SAMPLE_SEED strategy=$SAMPLE_STRATEGY target_class=$TARGET_CLASS)"
+echo "Num samples: $NUM_VAL_SAMPLES (split=$SAMPLE_SPLIT seed=$SAMPLE_SEED strategy=$SAMPLE_STRATEGY target_class=$TARGET_CLASS)"
 echo "Saliency: method=$SALIENCY_METHOD rise_num_masks=$RISE_NUM_MASKS rise_grid_size=$RISE_GRID_SIZE rise_p1=$RISE_P1 rise_gpu_batch=$RISE_GPU_BATCH rise_seed=$RISE_SEED rise_masks_path=${RISE_MASKS_PATH:-AUTO}"
 echo "Guided params: attn=$GUIDED_ATTENTION_EPOCH kl=$GUIDED_KL_LAMBDA kl_incr=$GUIDED_KL_INCR base_lr=$GUIDED_BASE_LR cls_lr=$GUIDED_CLASSIFIER_LR lr2_mult=$GUIDED_LR2_MULT seed=$GUIDED_SEED workers=$GUIDED_NUM_WORKERS"
 echo "Vanilla params: base_lr=$VANILLA_BASE_LR cls_lr=$VANILLA_CLASSIFIER_LR momentum=$VANILLA_MOMENTUM wd=$VANILLA_WEIGHT_DECAY seed=$VANILLA_SEED workers=$VANILLA_NUM_WORKERS nesterov=$VANILLA_NESTEROV"
@@ -123,6 +124,7 @@ CMD=(
   --output-dir "$OUT_DIR"
   --num-val-samples "$NUM_VAL_SAMPLES"
   --sample-seed "$SAMPLE_SEED"
+  --sample-split "$SAMPLE_SPLIT"
   --sample-strategy "$SAMPLE_STRATEGY"
   --target-class "$TARGET_CLASS"
   --saliency-method "$SALIENCY_METHOD"
