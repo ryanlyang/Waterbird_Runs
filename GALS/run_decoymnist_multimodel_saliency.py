@@ -469,7 +469,7 @@ def run() -> None:
             model = spec.model
             pred = infer_pred(model, x)
             target_cls = int(label) if args.target_class == "label" else int(pred)
-            sal = gradcam_single(model, model.conv2, x, target_cls=target_cls)
+            sal = gradcam_single(model, model.conv2, x, target_class=target_cls)
             save_saliency_variants(spec.name, sal, rgb, sd)
 
             info[f"{spec.name}_pred"] = int(pred)
