@@ -51,6 +51,8 @@ STD = [0.229, 0.224, 0.225]
 FLOAT_RE = re.compile(r"([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)")
 SPECIAL_SELECTION_STRATEGY = "waterbird_guided_miscls_or_guided_hit_other_fail"
 LEGACY_SPECIAL_SELECTION_STRATEGY = "landbird_miscls_or_pointing_success"
+GUIDED_HIT_VANILLA_FAIL_STRATEGY = "waterbird_guided_hit_vanilla_fail"
+SPLIT_NAME_TO_CODE = {"train": 0, "val": 1, "test": 2}
 
 
 def set_seed(seed: int) -> None:
@@ -134,28 +136,31 @@ def pointing_hit(saliency: np.ndarray, mask: np.ndarray) -> bool:
     return False
 
 
-def select_val_rows(metadata_df: pd.DataFrame, num_samples: int, seed: int, strategy: str) -> pd.DataFrame:
-    val_df = metadata_df[metadata_df["split"] == 1].copy()
-    if len(val_df) == 0:
-        raise RuntimeError("No validation rows found in metadata.csv (split == 1).")
+def select_val_rows(
+    metadata_df: pd.DataFrame, num_samples: int, seed: int, strategy: str, split_name: str = "val"
+) -> pd.DataFrame:
+    split_code = int(SPLIT_NAME_TO_CODE[split_name])
+    split_df = metadata_df[metadata_df["split"] == split_code].copy()
+    if len(split_df) == 0:
+        raise RuntimeError(f"No rows found in metadata.csv for split='{split_name}' (split == {split_code}).")
 
-    val_df["y"] = val_df["y"].astype(int)
-    val_df["place"] = val_df["place"].astype(int)
-    val_df["group"] = val_df["y"] * 2 + val_df["place"]
+    split_df["y"] = split_df["y"].astype(int)
+    split_df["place"] = split_df["place"].astype(int)
+    split_df["group"] = split_df["y"] * 2 + split_df["place"]
 
-    n = min(num_samples, len(val_df))
+    n = min(num_samples, len(split_df))
     rng = np.random.default_rng(seed)
 
     if strategy == "random":
-        return val_df.sample(n=n, random_state=seed).reset_index(drop=True)
+        return split_df.sample(n=n, random_state=seed).reset_index(drop=True)
 
-    groups = sorted(val_df["group"].unique().tolist())
+    groups = sorted(split_df["group"].unique().tolist())
     base = n // len(groups)
     rem = n % len(groups)
 
     picked_idx: List[int] = []
     for i, g in enumerate(groups):
-        g_df = val_df[val_df["group"] == g]
+        g_df = split_df[split_df["group"] == g]
         want = base + (1 if i < rem else 0)
         take = min(want, len(g_df))
         if take > 0:
@@ -163,13 +168,13 @@ def select_val_rows(metadata_df: pd.DataFrame, num_samples: int, seed: int, stra
             picked_idx.extend(chosen.tolist())
 
     if len(picked_idx) < n:
-        remaining = val_df.drop(index=picked_idx)
+        remaining = split_df.drop(index=picked_idx)
         need = min(n - len(picked_idx), len(remaining))
         if need > 0:
             chosen = rng.choice(remaining.index.to_numpy(), size=need, replace=False)
             picked_idx.extend(chosen.tolist())
 
-    out = val_df.loc[picked_idx].copy()
+    out = split_df.loc[picked_idx].copy()
     out = out.sample(frac=1.0, random_state=seed).reset_index(drop=True)
     return out
 
@@ -419,7 +424,9 @@ def select_val_rows_waterbird_rule(
     gt_root: Path,
     num_samples: int,
     seed: int,
+    split_name: str,
     target_class: str,
+    rule_mode: str,
     preprocess: transforms.Compose,
     device: torch.device,
     guided_model: nn.Module,
@@ -429,16 +436,20 @@ def select_val_rows_waterbird_rule(
     gals_model: Optional[GALSBinaryCAMModel],
     gals_rise: Optional[RISEExplainer],
 ) -> Tuple[pd.DataFrame, Dict[str, object]]:
-    val_df = metadata_df[metadata_df["split"] == 1].copy()
-    if len(val_df) == 0:
-        raise RuntimeError("No validation rows found in metadata.csv (split == 1).")
+    split_code = int(SPLIT_NAME_TO_CODE[split_name])
+    split_df = metadata_df[metadata_df["split"] == split_code].copy()
+    if len(split_df) == 0:
+        raise RuntimeError(f"No rows found in metadata.csv for split='{split_name}' (split == {split_code}).")
 
-    val_df["y"] = val_df["y"].astype(int)
-    val_df["place"] = val_df["place"].astype(int)
-    val_df["group"] = val_df["y"] * 2 + val_df["place"]
-    wb_df = val_df[val_df["y"] == 1].copy()
+    split_df["y"] = split_df["y"].astype(int)
+    split_df["place"] = split_df["place"].astype(int)
+    split_df["group"] = split_df["y"] * 2 + split_df["place"]
+    wb_df = split_df[split_df["y"] == 1].copy()
     if len(wb_df) == 0:
-        raise RuntimeError("No waterbird rows found in validation split (y == 1).")
+        raise RuntimeError(f"No waterbird rows found in split='{split_name}' (y == 1).")
+
+    if rule_mode not in {"legacy_or", "guided_hit_vanilla_fail"}:
+        raise ValueError(f"Unsupported rule_mode: {rule_mode}")
 
     n_target = min(int(num_samples), len(wb_df))
     ordered = wb_df.sample(frac=1.0, random_state=seed).reset_index(drop=True)
@@ -448,10 +459,14 @@ def select_val_rows_waterbird_rule(
     stats: Dict[str, object] = {
         "strategy": SPECIAL_SELECTION_STRATEGY,
         "selection_model": "guided",
+        "selection_rule_mode": rule_mode,
+        "sample_split": split_name,
         "target_class_mode": target_class,
         "requested": int(num_samples),
+        "cap_after_split_size": int(n_target),
+        "split_pool_size": int(len(split_df)),
         "cap_after_val_size": int(n_target),
-        "val_pool_size": int(len(val_df)),
+        "val_pool_size": int(len(split_df)),
         "waterbird_pool_size": int(len(wb_df)),
         "evaluated": 0,
         "missing_images": 0,
@@ -506,7 +521,8 @@ def select_val_rows_waterbird_rule(
 
         # Waterbirds labeling convention: y=0 landbird, y=1 waterbird.
         miscls_landbird = (label == 1 and pred == 0)
-        if miscls_landbird:
+        use_miscls = rule_mode == "legacy_or"
+        if use_miscls and miscls_landbird:
             stats["landbird_miscls_hits"] = int(stats["landbird_miscls_hits"]) + 1
 
         gt_mask_path, gt_mask_default = _resolve_gt_mask_path(gt_root, img_path, data_path)
@@ -529,20 +545,32 @@ def select_val_rows_waterbird_rule(
             stats["guided_pointing_success_hits"] = int(stats["guided_pointing_success_hits"]) + 1
 
         stats["evaluated"] = int(stats["evaluated"]) + 1
-        other_fail = (vanilla_hit is False) or (gals_hit is False)
+        if rule_mode == "guided_hit_vanilla_fail":
+            other_fail = (vanilla_hit is False)
+        else:
+            other_fail = (vanilla_hit is False) or (gals_hit is False)
         guided_hit_other_fail = (guided_hit is True) and bool(other_fail)
         if guided_hit_other_fail:
             stats["guided_pointing_success_other_fail_hits"] = int(stats["guided_pointing_success_other_fail_hits"]) + 1
 
-        if not (miscls_landbird or guided_hit_other_fail):
+        if rule_mode == "guided_hit_vanilla_fail":
+            selected_hit = guided_hit_other_fail
+        else:
+            selected_hit = (miscls_landbird or guided_hit_other_fail)
+
+        if not selected_hit:
             continue
 
         stats["selected_hits"] = int(stats["selected_hits"]) + 1
         row_dict = row.to_dict()
-        reason = "guided_misclassified_as_landbird" if miscls_landbird else "guided_pointing_success_other_model_failed"
+        if rule_mode == "guided_hit_vanilla_fail":
+            reason = "guided_pointing_success_vanilla_failed"
+        else:
+            reason = "guided_misclassified_as_landbird" if miscls_landbird else "guided_pointing_success_other_model_failed"
         row_dict.update(
             {
                 "selection_model": "guided",
+                "selection_rule_mode": rule_mode,
                 "selection_reason": reason,
                 "selection_pred": int(pred),
                 "selection_target_class": int(target),
@@ -1001,9 +1029,16 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--num-val-samples", type=int, default=500)
     p.add_argument("--sample-seed", type=int, default=0)
+    p.add_argument("--sample-split", choices=["train", "val", "test"], default="val")
     p.add_argument(
         "--sample-strategy",
-        choices=["balanced", "random", SPECIAL_SELECTION_STRATEGY, LEGACY_SPECIAL_SELECTION_STRATEGY],
+        choices=[
+            "balanced",
+            "random",
+            SPECIAL_SELECTION_STRATEGY,
+            LEGACY_SPECIAL_SELECTION_STRATEGY,
+            GUIDED_HIT_VANILLA_FAIL_STRATEGY,
+        ],
         default=SPECIAL_SELECTION_STRATEGY,
     )
     # Kept for backward compatibility with old sbatch wrappers.
@@ -1175,13 +1210,20 @@ def main() -> None:
 
     preprocess = build_preprocess()
     selection_stats: Optional[Dict[str, object]] = None
-    if args.sample_strategy in {SPECIAL_SELECTION_STRATEGY, LEGACY_SPECIAL_SELECTION_STRATEGY}:
+    if args.sample_strategy in {
+        SPECIAL_SELECTION_STRATEGY,
+        LEGACY_SPECIAL_SELECTION_STRATEGY,
+        GUIDED_HIT_VANILLA_FAIL_STRATEGY,
+    }:
         if args.sample_strategy == LEGACY_SPECIAL_SELECTION_STRATEGY:
             print(
                 f"[WARN] sample_strategy={LEGACY_SPECIAL_SELECTION_STRATEGY} is deprecated; "
                 f"using {SPECIAL_SELECTION_STRATEGY}.",
                 flush=True,
             )
+        rule_mode = "legacy_or"
+        if args.sample_strategy == GUIDED_HIT_VANILLA_FAIL_STRATEGY:
+            rule_mode = "guided_hit_vanilla_fail"
         if args.selection_model != "guided":
             print(
                 f"[WARN] selection_model={args.selection_model} was requested, "
@@ -1194,7 +1236,9 @@ def main() -> None:
             gt_root=gt_root,
             num_samples=args.num_val_samples,
             seed=args.sample_seed,
+            split_name=args.sample_split,
             target_class=args.target_class,
+            rule_mode=rule_mode,
             preprocess=preprocess,
             device=device,
             guided_model=guided_model,
@@ -1210,14 +1254,18 @@ def main() -> None:
             num_samples=args.num_val_samples,
             seed=args.sample_seed,
             strategy=args.sample_strategy,
+            split_name=args.sample_split,
         )
-    print(f"[INFO] Selected {len(selected)} val images for saliency generation.", flush=True)
+    print(f"[INFO] Selected {len(selected)} {args.sample_split} images for saliency generation.", flush=True)
     if selection_stats is not None:
         print(f"[INFO] Selection stats: {json.dumps(selection_stats)}", flush=True)
         if len(selected) < int(args.num_val_samples):
+            if args.sample_strategy == GUIDED_HIT_VANILLA_FAIL_STRATEGY:
+                criteria_text = "waterbird + guided pointing success + vanilla pointing failure"
+            else:
+                criteria_text = "waterbird->landbird misclass OR guided pointing success with vanilla/gals failure"
             print(
-                "[WARN] Fewer than requested samples satisfied "
-                "(waterbird->landbird misclass OR guided pointing success with vanilla/gals failure).",
+                f"[WARN] Fewer than requested samples satisfied ({criteria_text}).",
                 flush=True,
             )
     print(
@@ -1355,11 +1403,15 @@ def main() -> None:
         "data_path": str(data_path),
         "guided_gt_root": str(gt_root),
         "output_dir": str(out_dir),
+        "sample_split": args.sample_split,
+        "num_samples_requested": int(args.num_val_samples),
+        "num_samples_generated": int(len(sample_rows)),
         "num_val_samples_requested": int(args.num_val_samples),
         "num_val_samples_generated": int(len(sample_rows)),
         "sample_strategy": args.sample_strategy,
         "selection_model": "guided"
-        if args.sample_strategy in {SPECIAL_SELECTION_STRATEGY, LEGACY_SPECIAL_SELECTION_STRATEGY}
+        if args.sample_strategy
+        in {SPECIAL_SELECTION_STRATEGY, LEGACY_SPECIAL_SELECTION_STRATEGY, GUIDED_HIT_VANILLA_FAIL_STRATEGY}
         else None,
         "selection_rule_stats": selection_stats,
         "target_class_mode": args.target_class,
