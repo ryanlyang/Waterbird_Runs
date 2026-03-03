@@ -166,6 +166,20 @@ def align_state_dict_keys(state_dict: Dict[str, torch.Tensor], model: nn.Module)
     return state_dict
 
 
+def infer_output_dim_from_state_dict(
+    state_dict: Dict[str, torch.Tensor],
+    candidate_suffixes: List[str],
+    default: int,
+) -> int:
+    for suffix in candidate_suffixes:
+        for key, tensor in state_dict.items():
+            if key.endswith(suffix) and isinstance(tensor, torch.Tensor) and tensor.ndim >= 1:
+                out_dim = int(tensor.shape[0])
+                if out_dim > 0:
+                    return out_dim
+    return int(default)
+
+
 def build_preprocess() -> transforms.Compose:
     return transforms.Compose(
         [
@@ -456,14 +470,21 @@ class VanillaRunner(MethodRunnerBase):
 
     def __init__(self, checkpoint: Path, num_classes: int, device: torch.device):
         self.device = device
-        self.model = models.resnet50(pretrained=False).to(device)
-        self.model.fc = nn.Linear(self.model.fc.in_features, num_classes).to(device)
         state = torch_load_compat(checkpoint, device)
         state_dict = extract_state_dict(state) if isinstance(state, dict) else state
+        classifier_classes = infer_output_dim_from_state_dict(
+            state_dict=state_dict,
+            candidate_suffixes=["fc.weight", "classifier.weight", "base.fc.weight"],
+            default=num_classes,
+        )
+
+        self.model = models.resnet50(pretrained=False).to(device)
+        self.model.fc = nn.Linear(self.model.fc.in_features, int(classifier_classes)).to(device)
         state_dict = align_state_dict_keys(state_dict, self.model)
         self.model.load_state_dict(state_dict, strict=False)
         self.model.eval()
         self.hook = FeatureHook(self.model.layer4)  # type: ignore[attr-defined]
+        self.classifier_classes = int(classifier_classes)
 
     @torch.no_grad()
     def predict_and_saliency(
@@ -476,10 +497,19 @@ class VanillaRunner(MethodRunnerBase):
         logits = self.model(image_tensor)
         if self.hook.features is None:
             raise RuntimeError("Vanilla feature hook did not capture layer4 features.")
-        pred = int(logits.argmax(dim=1).item())
-        target = int(label if target_mode == "label" else pred)
-        weights = self.model.fc.weight[target]  # type: ignore[attr-defined]
-        cam = compute_cam(self.hook.features[0], weights)
+
+        if logits.ndim == 2 and logits.shape[1] == 1:
+            score = logits[:, 0]
+            pred = int((score >= 0).long().item())
+            target = int(label if target_mode == "label" else pred)
+            w_pos = self.model.fc.weight[0]  # type: ignore[attr-defined]
+            class_weight = w_pos if target == 1 else (-w_pos)
+            cam = compute_cam(self.hook.features[0], class_weight)
+        else:
+            pred = int(logits.argmax(dim=1).item())
+            target = int(label if target_mode == "label" else pred)
+            class_weight = self.model.fc.weight[target]  # type: ignore[attr-defined]
+            cam = compute_cam(self.hook.features[0], class_weight)
         return pred, target, cam
 
     def close(self) -> None:
@@ -582,12 +612,22 @@ class ABNRunner(MethodRunnerBase):
 
     def __init__(self, checkpoint: Path, num_classes: int, device: torch.device):
         self.device = device
-        self.model = resnet50_abn(pretrained=False, num_classes=num_classes, add_after_attention=True).to(device)
         state = torch_load_compat(checkpoint, device)
         state_dict = extract_state_dict(state) if isinstance(state, dict) else state
+        classifier_classes = infer_output_dim_from_state_dict(
+            state_dict=state_dict,
+            candidate_suffixes=["fc.weight", "att_conv.weight", "bn_att2.weight", "att_conv2.weight"],
+            default=num_classes,
+        )
+        self.model = resnet50_abn(
+            pretrained=False,
+            num_classes=int(classifier_classes),
+            add_after_attention=True,
+        ).to(device)
         state_dict = align_state_dict_keys(state_dict, self.model)
         self.model.load_state_dict(state_dict, strict=False)
         self.model.eval()
+        self.classifier_classes = int(classifier_classes)
 
     @torch.no_grad()
     def predict_and_saliency(
@@ -598,7 +638,10 @@ class ABNRunner(MethodRunnerBase):
         pil_image: Optional[Image.Image] = None,
     ) -> Tuple[int, int, np.ndarray]:
         _att_logits, logits, extra = self.model(image_tensor, provided_att=None)
-        pred = int(logits.argmax(dim=1).item())
+        if logits.ndim == 2 and logits.shape[1] == 1:
+            pred = int((logits[:, 0] >= 0).long().item())
+        else:
+            pred = int(logits.argmax(dim=1).item())
         target = int(label if target_mode == "label" else pred)
         att = extra[0]  # Bx1xhxw
         sal = att[0, 0].detach().cpu().numpy().astype(np.float32)
