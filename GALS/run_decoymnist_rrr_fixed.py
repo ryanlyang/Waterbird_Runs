@@ -34,15 +34,17 @@ class Net(nn.Module):
         self.fc1 = nn.Linear(4 * 4 * 50, 256)
         self.fc2 = nn.Linear(256, 10)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, return_fmaps: bool = False):
         x = F.relu(self.conv1(x))
         x = F.max_pool2d(x, 2, 2)
-        x = F.relu(self.conv2(x))
-        x = F.max_pool2d(x, 2, 2)
+        fmaps = F.relu(self.conv2(x))
+        x = F.max_pool2d(fmaps, 2, 2)
         x = x.view(-1, 4 * 4 * 50)
         x = F.relu(self.fc1(x))
-        x = self.fc2(x)
-        return F.log_softmax(x, dim=1)
+        logits = self.fc2(x)
+        if return_fmaps:
+            return logits, fmaps
+        return logits
 
 
 def set_seed(seed: int) -> None:
@@ -124,9 +126,9 @@ def evaluate(model: nn.Module, loader: utils.DataLoader, device: torch.device) -
             data, target = batch
         data = data.to(device)
         target = target.to(device)
-        out = model(data)
-        loss_sum += F.nll_loss(out, target, reduction="sum").item()
-        correct += out.argmax(dim=1).eq(target).sum().item()
+        logits = model(data)
+        loss_sum += F.cross_entropy(logits, target, reduction="sum").item()
+        correct += logits.argmax(dim=1).eq(target).sum().item()
         total += data.size(0)
     avg_loss = loss_sum / max(total, 1)
     acc = 100.0 * correct / max(total, 1)
@@ -154,6 +156,10 @@ def train_one_seed(args, seed: int, full_train: GuidedImageFolder, test_dataset:
         grad_criterion = nn.L1Loss()
     else:
         grad_criterion = nn.MSELoss()
+    if args.cam_criterion == "L1":
+        cam_criterion = nn.L1Loss()
+    else:
+        cam_criterion = nn.MSELoss()
 
     best_val_acc = -1.0
     best_val_loss = float("inf")
@@ -180,11 +186,39 @@ def train_one_seed(args, seed: int, full_train: GuidedImageFolder, test_dataset:
             data.requires_grad_(True)
             optimizer.zero_grad()
 
-            out = model(data)
-            cls_loss = F.nll_loss(out, target)
-            dy_dx = torch.autograd.grad(cls_loss, data, create_graph=True)[0]
-            rrr_loss = grad_criterion(dy_dx, dy_dx * gt_mask)
-            loss = cls_loss + args.grad_weight * rrr_loss
+            logits, fmaps = model(data, return_fmaps=True)
+            cls_loss = F.cross_entropy(logits, target)
+            loss = cls_loss
+
+            if args.loss_mode in ("rrr", "both"):
+                dy_dx = torch.autograd.grad(cls_loss, data, create_graph=True, retain_graph=True)[0]
+                rrr_loss = grad_criterion(dy_dx, dy_dx * gt_mask)
+                loss = loss + args.grad_weight * rrr_loss
+            if args.loss_mode in ("gradcam", "both"):
+                one_hot = torch.zeros_like(logits)
+                one_hot.scatter_(1, target.unsqueeze(1), 1.0)
+                grads = torch.autograd.grad(
+                    logits,
+                    fmaps,
+                    grad_outputs=one_hot,
+                    retain_graph=True,
+                    create_graph=True,
+                )[0]
+                weights = F.adaptive_avg_pool2d(grads, 1)
+                gcam = (fmaps * weights).sum(dim=1, keepdim=True)
+                gcam = F.relu(gcam)
+                gcam = F.interpolate(gcam, size=data.shape[-2:], mode="bilinear", align_corners=False)
+                gflat = gcam.view(gcam.size(0), -1)
+                gmax = gflat.max(dim=1, keepdim=True)[0]
+                gmax = torch.where(gmax == 0, torch.ones_like(gmax), gmax)
+                gmin = gflat.min(dim=1, keepdim=True)[0]
+                gcam = ((gflat - gmin) / gmax).view_as(gcam)
+
+                if args.cam_mode == "suppress_outside":
+                    cam_loss = cam_criterion(gcam, gcam * gt_mask)
+                else:
+                    cam_loss = cam_criterion(gcam, gt_mask)
+                loss = loss + args.cam_weight * cam_loss
 
             loss.backward()
             optimizer.step()
@@ -231,6 +265,10 @@ def main() -> None:
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--grad-weight", type=float, default=72503.48035960984)
     parser.add_argument("--grad-criterion", choices=["L1", "L2"], default="L1")
+    parser.add_argument("--loss-mode", choices=["rrr", "gradcam", "both"], default="rrr")
+    parser.add_argument("--cam-weight", type=float, default=1.0)
+    parser.add_argument("--cam-criterion", choices=["L1", "L2"], default="L1")
+    parser.add_argument("--cam-mode", choices=["match", "suppress_outside"], default="match")
     parser.add_argument("--n-seeds", type=int, default=5)
     parser.add_argument("--seed-start", type=int, default=0)
     parser.add_argument("--num-workers", type=int, default=4)
@@ -259,7 +297,8 @@ def main() -> None:
     print(f"train={len(full_train)} test={len(test_dataset)} split={1.0 - args.val_frac:.2f}/{args.val_frac:.2f}")
     print(
         f"optimizer=Adam lr={args.lr} weight_decay={args.weight_decay} "
-        f"grad_weight={args.grad_weight} grad_criterion={args.grad_criterion}"
+        f"loss_mode={args.loss_mode} grad_weight={args.grad_weight} grad_criterion={args.grad_criterion} "
+        f"cam_weight={args.cam_weight} cam_criterion={args.cam_criterion} cam_mode={args.cam_mode}"
     )
 
     rows = []
