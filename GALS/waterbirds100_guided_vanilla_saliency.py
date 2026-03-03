@@ -15,6 +15,7 @@ import json
 import os
 import random
 import re
+import shutil
 import subprocess
 import sys
 from datetime import datetime
@@ -48,6 +49,8 @@ GROUP_NAMES = ["Land_on_Land", "Land_on_Water", "Water_on_Land", "Water_on_Water
 MEAN = [0.485, 0.456, 0.406]
 STD = [0.229, 0.224, 0.225]
 FLOAT_RE = re.compile(r"([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)")
+SPECIAL_SELECTION_STRATEGY = "waterbird_guided_miscls_or_guided_hit_other_fail"
+LEGACY_SPECIAL_SELECTION_STRATEGY = "landbird_miscls_or_pointing_success"
 
 
 def set_seed(seed: int) -> None:
@@ -329,8 +332,33 @@ def build_rise_explainer(
     return explainer
 
 
-def _load_binary_gt_mask(mask_path: Path, h: int, w: int) -> Optional[np.ndarray]:
-    if not mask_path.is_file():
+def _resolve_gt_mask_path(mask_root: Path, image_path: Path, data_path: Path) -> Tuple[Optional[Path], Path]:
+    # Prefer the existing WeCLIP-style flat naming, then try nested mirrors.
+    default = mask_root / rgw.mask_name_from_path(str(image_path))
+    try:
+        rel = image_path.relative_to(data_path)
+    except Exception:
+        rel = Path(image_path.name)
+    rel_no_ext = rel.with_suffix("")
+    parent = rel.parent.name
+    parent_underscored = parent.replace(".", "_")
+    stem = rel.stem
+    cands = [
+        default,
+        mask_root / parent_underscored / f"{stem}.png",
+        mask_root / parent / f"{stem}.png",
+        mask_root / rel_no_ext.with_suffix(".png"),
+        mask_root / rel_no_ext.with_suffix(".jpg"),
+        mask_root / rel_no_ext.with_suffix(".jpeg"),
+    ]
+    for c in cands:
+        if c.is_file():
+            return c, default
+    return None, default
+
+
+def _load_binary_gt_mask(mask_path: Optional[Path], h: int, w: int) -> Optional[np.ndarray]:
+    if mask_path is None or (not mask_path.is_file()):
         return None
     mask = np.array(open_gray_with_retry(mask_path), dtype=np.float32)
     if mask.shape[:2] != (h, w):
@@ -354,7 +382,38 @@ def _guided_predict_and_rise_saliency(
     return pred, target, sal
 
 
-def select_val_rows_landbird_or_pointing_success(
+@torch.no_grad()
+def _vanilla_predict_and_rise_saliency(
+    input_tensor: torch.Tensor,
+    label: int,
+    use_label_target: bool,
+    vanilla_model: nn.Module,
+    vanilla_rise: RISEExplainer,
+) -> Tuple[int, int, np.ndarray]:
+    logits = vanilla_model(input_tensor)
+    pred = int(logits.argmax(dim=1).item())
+    target = label if use_label_target else pred
+    sal = vanilla_rise(input_tensor)[target].detach().cpu().numpy().astype(np.float32)
+    return pred, target, sal
+
+
+@torch.no_grad()
+def _gals_predict_and_rise_saliency(
+    input_tensor: torch.Tensor,
+    label: int,
+    use_label_target: bool,
+    gals_model: GALSBinaryCAMModel,
+    gals_rise: RISEExplainer,
+) -> Tuple[int, int, np.ndarray]:
+    logits, _ = gals_model(input_tensor)
+    prob_1 = torch.sigmoid(logits[:, 0])
+    pred = int((prob_1 >= 0.5).long().item())
+    target = label if use_label_target else pred
+    sal = gals_rise(input_tensor)[target].detach().cpu().numpy().astype(np.float32)
+    return pred, target, sal
+
+
+def select_val_rows_waterbird_rule(
     metadata_df: pd.DataFrame,
     data_path: Path,
     gt_root: Path,
@@ -365,6 +424,10 @@ def select_val_rows_landbird_or_pointing_success(
     device: torch.device,
     guided_model: nn.Module,
     guided_rise: RISEExplainer,
+    vanilla_model: nn.Module,
+    vanilla_rise: RISEExplainer,
+    gals_model: Optional[GALSBinaryCAMModel],
+    gals_rise: Optional[RISEExplainer],
 ) -> Tuple[pd.DataFrame, Dict[str, object]]:
     val_df = metadata_df[metadata_df["split"] == 1].copy()
     if len(val_df) == 0:
@@ -373,24 +436,29 @@ def select_val_rows_landbird_or_pointing_success(
     val_df["y"] = val_df["y"].astype(int)
     val_df["place"] = val_df["place"].astype(int)
     val_df["group"] = val_df["y"] * 2 + val_df["place"]
+    wb_df = val_df[val_df["y"] == 1].copy()
+    if len(wb_df) == 0:
+        raise RuntimeError("No waterbird rows found in validation split (y == 1).")
 
-    n_target = min(int(num_samples), len(val_df))
-    ordered = val_df.sample(frac=1.0, random_state=seed).reset_index(drop=True)
+    n_target = min(int(num_samples), len(wb_df))
+    ordered = wb_df.sample(frac=1.0, random_state=seed).reset_index(drop=True)
     use_label_target = target_class == "label"
 
     selected_rows: List[Dict[str, object]] = []
     stats: Dict[str, object] = {
-        "strategy": "landbird_miscls_or_pointing_success",
+        "strategy": SPECIAL_SELECTION_STRATEGY,
         "selection_model": "guided",
         "target_class_mode": target_class,
         "requested": int(num_samples),
         "cap_after_val_size": int(n_target),
         "val_pool_size": int(len(val_df)),
+        "waterbird_pool_size": int(len(wb_df)),
         "evaluated": 0,
         "missing_images": 0,
         "missing_gt_masks": 0,
         "landbird_miscls_hits": 0,
-        "pointing_success_hits": 0,
+        "guided_pointing_success_hits": 0,
+        "guided_pointing_success_other_fail_hits": 0,
         "selected_hits": 0,
     }
 
@@ -417,39 +485,79 @@ def select_val_rows_landbird_or_pointing_success(
             guided_model=guided_model,
             guided_rise=guided_rise,
         )
+        vanilla_pred, vanilla_target, vanilla_saliency_224 = _vanilla_predict_and_rise_saliency(
+            input_tensor=input_tensor,
+            label=label,
+            use_label_target=use_label_target,
+            vanilla_model=vanilla_model,
+            vanilla_rise=vanilla_rise,
+        )
+        gals_pred: Optional[int] = None
+        gals_target: Optional[int] = None
+        gals_saliency_224: Optional[np.ndarray] = None
+        if gals_model is not None and gals_rise is not None:
+            gals_pred, gals_target, gals_saliency_224 = _gals_predict_and_rise_saliency(
+                input_tensor=input_tensor,
+                label=label,
+                use_label_target=use_label_target,
+                gals_model=gals_model,
+                gals_rise=gals_rise,
+            )
 
         # Waterbirds labeling convention: y=0 landbird, y=1 waterbird.
         miscls_landbird = (label == 1 and pred == 0)
         if miscls_landbird:
             stats["landbird_miscls_hits"] = int(stats["landbird_miscls_hits"]) + 1
 
-        mask_name = rgw.mask_name_from_path(str(img_path))
-        gt_mask_path = gt_root / mask_name
+        gt_mask_path, gt_mask_default = _resolve_gt_mask_path(gt_root, img_path, data_path)
         mask_bin = _load_binary_gt_mask(gt_mask_path, h=h, w=w)
+        guided_hit: Optional[bool] = None
+        vanilla_hit: Optional[bool] = None
+        gals_hit: Optional[bool] = None
         if mask_bin is None:
             stats["missing_gt_masks"] = int(stats["missing_gt_masks"]) + 1
-            pointing_success = False
         else:
             saliency = resize_map(normalize_map(saliency_224), width=w, height=h)
-            pointing_success = pointing_hit(saliency, mask_bin)
+            guided_hit = pointing_hit(saliency, mask_bin)
+            vanilla_saliency = resize_map(normalize_map(vanilla_saliency_224), width=w, height=h)
+            vanilla_hit = pointing_hit(vanilla_saliency, mask_bin)
+            if gals_saliency_224 is not None:
+                gals_saliency = resize_map(normalize_map(gals_saliency_224), width=w, height=h)
+                gals_hit = pointing_hit(gals_saliency, mask_bin)
 
-        if pointing_success:
-            stats["pointing_success_hits"] = int(stats["pointing_success_hits"]) + 1
+        if guided_hit is True:
+            stats["guided_pointing_success_hits"] = int(stats["guided_pointing_success_hits"]) + 1
 
         stats["evaluated"] = int(stats["evaluated"]) + 1
-        if not (miscls_landbird or pointing_success):
+        other_fail = (vanilla_hit is False) or (gals_hit is False)
+        guided_hit_other_fail = (guided_hit is True) and bool(other_fail)
+        if guided_hit_other_fail:
+            stats["guided_pointing_success_other_fail_hits"] = int(stats["guided_pointing_success_other_fail_hits"]) + 1
+
+        if not (miscls_landbird or guided_hit_other_fail):
             continue
 
         stats["selected_hits"] = int(stats["selected_hits"]) + 1
         row_dict = row.to_dict()
+        reason = "guided_misclassified_as_landbird" if miscls_landbird else "guided_pointing_success_other_model_failed"
         row_dict.update(
             {
                 "selection_model": "guided",
+                "selection_reason": reason,
                 "selection_pred": int(pred),
                 "selection_target_class": int(target),
                 "selection_misclassified_as_landbird": bool(miscls_landbird),
-                "selection_pointing_success": bool(pointing_success),
+                "selection_pointing_success": bool(guided_hit is True),
+                "selection_other_model_failed_pointing": bool(guided_hit_other_fail),
+                "selection_guided_pointing_hit": guided_hit,
+                "selection_vanilla_pointing_hit": vanilla_hit,
+                "selection_gals_vit_pointing_hit": gals_hit,
+                "selection_vanilla_pred": int(vanilla_pred),
+                "selection_vanilla_target_class": int(vanilla_target),
+                "selection_gals_vit_pred": (None if gals_pred is None else int(gals_pred)),
+                "selection_gals_vit_target_class": (None if gals_target is None else int(gals_target)),
                 "selection_gt_mask_path": str(gt_mask_path) if mask_bin is not None else None,
+                "selection_gt_mask_default_path": str(gt_mask_default),
             }
         )
         selected_rows.append(row_dict)
@@ -687,9 +795,18 @@ def train_gals_vit(args, out_dir: Path) -> Dict[str, object]:
         }
 
     if args.gals_ckpt and Path(args.gals_ckpt).is_file():
+        src_ckpt = Path(args.gals_ckpt).resolve()
+        ckpt_copy_dir = out_dir / "checkpoints" / "gals_vit"
+        ckpt_copy_dir.mkdir(parents=True, exist_ok=True)
+        dst_ckpt = ckpt_copy_dir / src_ckpt.name
+        if src_ckpt != dst_ckpt.resolve():
+            shutil.copy2(src_ckpt, dst_ckpt)
+        else:
+            dst_ckpt = src_ckpt
         return {
             "enabled": True,
-            "checkpoint": str(Path(args.gals_ckpt).resolve()),
+            "checkpoint": str(dst_ckpt.resolve()),
+            "source_checkpoint": str(src_ckpt),
             "best_balanced_val_acc": None,
             "test_acc": None,
             "per_group": None,
@@ -736,6 +853,13 @@ def train_gals_vit(args, out_dir: Path) -> Dict[str, object]:
 
     metrics = run_command_with_log(cmd=cmd, cwd=script_dir, log_path=log_path)
     ckpt_path = find_best_ckpt(run_dir)
+    ckpt_copy_dir = out_dir / "checkpoints" / "gals_vit"
+    ckpt_copy_dir.mkdir(parents=True, exist_ok=True)
+    ckpt_copy_path = ckpt_copy_dir / ckpt_path.name
+    if ckpt_path.resolve() != ckpt_copy_path.resolve():
+        shutil.copy2(ckpt_path, ckpt_copy_path)
+    else:
+        ckpt_copy_path = ckpt_path
 
     per_group, worst_group, group_acc = parse_gals_group_metrics(metrics)
     test_acc = scale_if_fraction(metrics.get("test_acc"))
@@ -743,7 +867,8 @@ def train_gals_vit(args, out_dir: Path) -> Dict[str, object]:
 
     return {
         "enabled": True,
-        "checkpoint": str(ckpt_path.resolve()),
+        "checkpoint": str(ckpt_copy_path.resolve()),
+        "source_checkpoint": str(ckpt_path.resolve()),
         "best_balanced_val_acc": best_balanced_val,
         "test_acc": test_acc,
         "per_group": per_group,
@@ -874,12 +999,12 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Output directory. If empty, creates timestamped folder under <dataset_parent>/logsWaterbird/.",
     )
-    p.add_argument("--num-val-samples", type=int, default=150)
+    p.add_argument("--num-val-samples", type=int, default=500)
     p.add_argument("--sample-seed", type=int, default=0)
     p.add_argument(
         "--sample-strategy",
-        choices=["balanced", "random", "landbird_miscls_or_pointing_success"],
-        default="balanced",
+        choices=["balanced", "random", SPECIAL_SELECTION_STRATEGY, LEGACY_SPECIAL_SELECTION_STRATEGY],
+        default=SPECIAL_SELECTION_STRATEGY,
     )
     # Kept for backward compatibility with old sbatch wrappers.
     # Current conditional strategy is intentionally GUIDED-only.
@@ -1050,14 +1175,20 @@ def main() -> None:
 
     preprocess = build_preprocess()
     selection_stats: Optional[Dict[str, object]] = None
-    if args.sample_strategy == "landbird_miscls_or_pointing_success":
+    if args.sample_strategy in {SPECIAL_SELECTION_STRATEGY, LEGACY_SPECIAL_SELECTION_STRATEGY}:
+        if args.sample_strategy == LEGACY_SPECIAL_SELECTION_STRATEGY:
+            print(
+                f"[WARN] sample_strategy={LEGACY_SPECIAL_SELECTION_STRATEGY} is deprecated; "
+                f"using {SPECIAL_SELECTION_STRATEGY}.",
+                flush=True,
+            )
         if args.selection_model != "guided":
             print(
                 f"[WARN] selection_model={args.selection_model} was requested, "
-                "but this strategy is GUIDED-only. Using guided.",
+                "but this strategy is GUIDED-first by definition. Using guided.",
                 flush=True,
             )
-        selected, selection_stats = select_val_rows_landbird_or_pointing_success(
+        selected, selection_stats = select_val_rows_waterbird_rule(
             metadata_df=metadata_df,
             data_path=data_path,
             gt_root=gt_root,
@@ -1068,6 +1199,10 @@ def main() -> None:
             device=device,
             guided_model=guided_model,
             guided_rise=guided_rise,
+            vanilla_model=vanilla_model,
+            vanilla_rise=vanilla_rise,
+            gals_model=gals_model,
+            gals_rise=gals_rise,
         )
     else:
         selected = select_val_rows(
@@ -1082,7 +1217,7 @@ def main() -> None:
         if len(selected) < int(args.num_val_samples):
             print(
                 "[WARN] Fewer than requested samples satisfied "
-                "(waterbird->landbird misclass OR pointing-game success).",
+                "(waterbird->landbird misclass OR guided pointing success with vanilla/gals failure).",
                 flush=True,
             )
     print(
@@ -1125,11 +1260,21 @@ def main() -> None:
         }
         if "selection_model" in row:
             info["selection_model"] = row.get("selection_model")
+            info["selection_reason"] = row.get("selection_reason")
             info["selection_pred"] = row.get("selection_pred")
             info["selection_target_class"] = row.get("selection_target_class")
             info["selection_misclassified_as_landbird"] = row.get("selection_misclassified_as_landbird")
             info["selection_pointing_success"] = row.get("selection_pointing_success")
+            info["selection_other_model_failed_pointing"] = row.get("selection_other_model_failed_pointing")
+            info["selection_guided_pointing_hit"] = row.get("selection_guided_pointing_hit")
+            info["selection_vanilla_pointing_hit"] = row.get("selection_vanilla_pointing_hit")
+            info["selection_gals_vit_pointing_hit"] = row.get("selection_gals_vit_pointing_hit")
+            info["selection_vanilla_pred"] = row.get("selection_vanilla_pred")
+            info["selection_vanilla_target_class"] = row.get("selection_vanilla_target_class")
+            info["selection_gals_vit_pred"] = row.get("selection_gals_vit_pred")
+            info["selection_gals_vit_target_class"] = row.get("selection_gals_vit_target_class")
             info["selection_gt_mask_path"] = row.get("selection_gt_mask_path")
+            info["selection_gt_mask_default_path"] = row.get("selection_gt_mask_default_path")
 
         with torch.no_grad():
             # Guided
@@ -1169,8 +1314,13 @@ def main() -> None:
 
         save_rgb(sample_dir / "original_image.png", image_rgb)
 
-        mask_name = rgw.mask_name_from_path(str(img_path))
-        gt_mask_path = gt_root / mask_name
+        gt_mask_path_str = row.get("selection_gt_mask_path") if isinstance(row, pd.Series) else None
+        if isinstance(gt_mask_path_str, str) and gt_mask_path_str:
+            gt_mask_path = Path(gt_mask_path_str)
+        else:
+            gt_mask_path, gt_mask_default = _resolve_gt_mask_path(gt_root, img_path, data_path)
+            if gt_mask_path is None:
+                gt_mask_path = gt_mask_default
         has_mask = save_gt_mask_variants(gt_mask_path, image_rgb, sample_dir)
         if not has_mask:
             with open(sample_dir / "gt_mask_missing.txt", "w") as f:
@@ -1208,7 +1358,9 @@ def main() -> None:
         "num_val_samples_requested": int(args.num_val_samples),
         "num_val_samples_generated": int(len(sample_rows)),
         "sample_strategy": args.sample_strategy,
-        "selection_model": "guided" if args.sample_strategy == "landbird_miscls_or_pointing_success" else None,
+        "selection_model": "guided"
+        if args.sample_strategy in {SPECIAL_SELECTION_STRATEGY, LEGACY_SPECIAL_SELECTION_STRATEGY}
+        else None,
         "selection_rule_stats": selection_stats,
         "target_class_mode": args.target_class,
         "saliency_method": args.saliency_method,
@@ -1251,11 +1403,21 @@ def main() -> None:
             "gals_vit_saliency_target_class",
             "gt_mask_path",
             "selection_model",
+            "selection_reason",
             "selection_pred",
             "selection_target_class",
             "selection_misclassified_as_landbird",
             "selection_pointing_success",
+            "selection_other_model_failed_pointing",
+            "selection_guided_pointing_hit",
+            "selection_vanilla_pointing_hit",
+            "selection_gals_vit_pointing_hit",
+            "selection_vanilla_pred",
+            "selection_vanilla_target_class",
+            "selection_gals_vit_pred",
+            "selection_gals_vit_target_class",
             "selection_gt_mask_path",
+            "selection_gt_mask_default_path",
         ]
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()

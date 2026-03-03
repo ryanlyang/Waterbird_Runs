@@ -35,9 +35,9 @@ GUIDED_GT_ROOT=${GUIDED_GT_ROOT:-/home/ryreu/guided_cnn/waterbirds/LearningToLoo
 OUT_DIR_DEFAULT="${LOG_ROOT}/wb95_guided_vanilla_gals_saliency_${SLURM_JOB_ID:-local_$(date +%Y%m%d_%H%M%S)}"
 OUT_DIR=${OUT_DIR:-$OUT_DIR_DEFAULT}
 
-NUM_VAL_SAMPLES=${NUM_VAL_SAMPLES:-200}
+NUM_VAL_SAMPLES=${NUM_VAL_SAMPLES:-500}
 SAMPLE_SEED=${SAMPLE_SEED:-0}
-SAMPLE_STRATEGY=${SAMPLE_STRATEGY:-landbird_miscls_or_pointing_success}
+SAMPLE_STRATEGY=${SAMPLE_STRATEGY:-waterbird_guided_miscls_or_guided_hit_other_fail}
 TARGET_CLASS=${TARGET_CLASS:-label}
 SALIENCY_METHOD=${SALIENCY_METHOD:-rise}
 RISE_NUM_MASKS=${RISE_NUM_MASKS:-2000}
