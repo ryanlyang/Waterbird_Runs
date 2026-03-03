@@ -53,7 +53,13 @@ def set_seed(seed: int) -> None:
 
 
 def _load_attention_map(path: Path) -> torch.Tensor:
-    payload = torch.load(path, map_location="cpu")
+    # PyTorch >=2.6 defaults torch.load(..., weights_only=True), which
+    # rejects non-tensor payloads used by these saved attention maps.
+    try:
+        payload = torch.load(path, map_location="cpu", weights_only=False)
+    except TypeError:
+        # Older PyTorch versions do not support the weights_only argument.
+        payload = torch.load(path, map_location="cpu")
     arr = None
     if isinstance(payload, dict):
         for key in ("attentions", "unnormalized_attentions", "attention", "cam", "saliency"):
