@@ -7,6 +7,10 @@ Supported methods:
 - vanilla
 - gals (binary single-logit GALS model from this repo)
 - afr (AFR stage-1 model, optional stage-2 last-layer override)
+- upweight (generic CNN checkpoint from main.py training)
+- abn (ABN checkpoint from main.py training)
+- clip_zs (zero-shot CLIP with prompt templates)
+- clip_lr (CLIP features + LogisticRegression head)
 
 For each method and dataset, this script reports:
 - overall Pointing Game accuracy
@@ -46,6 +50,7 @@ if str(THIS_DIR) not in sys.path:
     sys.path.insert(0, str(THIS_DIR))
 
 from models.resnet import resnet50 as gals_resnet50  # noqa: E402
+from models.resnet_abn import resnet50 as resnet50_abn  # noqa: E402
 
 
 SPLIT_MAP = {"train": 0, "val": 1, "test": 2}
@@ -180,6 +185,25 @@ def normalize_map(arr: np.ndarray) -> np.ndarray:
     return out
 
 
+def torch_load_compat(path: Path, device: torch.device):
+    """
+    torch.load compatibility across torch versions:
+    - torch<=2.5 default weights_only=False
+    - torch>=2.6 default weights_only=True (can fail on older checkpoints)
+    """
+    try:
+        return torch.load(path, map_location=device)
+    except Exception as exc:
+        msg = str(exc)
+        if "Weights only load failed" in msg:
+            try:
+                return torch.load(path, map_location=device, weights_only=False)
+            except TypeError:
+                # Older torch that doesn't support weights_only kwarg.
+                return torch.load(path, map_location=device)
+        raise
+
+
 def compute_cam(features: torch.Tensor, class_weights: torch.Tensor) -> np.ndarray:
     cam = torch.einsum("c,chw->hw", class_weights, features)
     cam = torch.relu(cam)
@@ -276,11 +300,122 @@ def _import_afr_models(afr_root: Path):
     return module
 
 
+def _try_import_clip():
+    try:
+        import clip  # type: ignore
+
+        return clip
+    except Exception:
+        from CLIP.clip import clip  # type: ignore
+
+        return clip
+
+
+def _parse_csv_list(text: str) -> List[str]:
+    return [x.strip() for x in str(text).split(",") if x.strip()]
+
+
+def _default_clip_templates() -> List[str]:
+    return [
+        "a photo of a {}.",
+        "a blurry photo of a {}.",
+        "a bright photo of a {}.",
+        "a close-up photo of a {}.",
+        "a cropped photo of a {}.",
+        "a low resolution photo of a {}.",
+        "a good photo of a {}.",
+        "a photo of the {}.",
+    ]
+
+
+def _split_root_and_dir(dataset_path: str) -> Tuple[str, str]:
+    p = Path(dataset_path).expanduser().resolve()
+    if (p / "metadata.csv").exists():
+        return str(p.parent), p.name
+    raise FileNotFoundError(f"Expected Waterbirds dataset dir containing metadata.csv, got: {p}")
+
+
+@dataclass(frozen=True)
+class _ClipCfgData:
+    WATERBIRDS_DIR: str
+    SIZE: int = 224
+    REMOVE_BACKGROUND: bool = False
+    ATTENTION_DIR: str = "NONE"
+
+
+@dataclass(frozen=True)
+class _ClipCfg:
+    DATA: _ClipCfgData
+
+
+def _load_waterbirds_for_clip(dataset_path: str):
+    from datasets.waterbirds import Waterbirds  # type: ignore
+
+    root, waterbirds_dir = _split_root_and_dir(dataset_path)
+    cfg = _ClipCfg(DATA=_ClipCfgData(WATERBIRDS_DIR=waterbirds_dir))
+    return root, cfg, Waterbirds
+
+
+def _extract_clip_features(
+    dataset,
+    model,
+    device: torch.device,
+    batch_size: int,
+    num_workers: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    from torch.utils.data import DataLoader
+
+    loader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=(device.type == "cuda"),
+    )
+    feats: List[np.ndarray] = []
+    labels: List[np.ndarray] = []
+    model.eval()
+    with torch.no_grad():
+        for batch in loader:
+            images = batch["image"].to(device, non_blocking=True)
+            out = model.encode_image(images).float()
+            out = out / out.norm(dim=-1, keepdim=True)
+            feats.append(out.cpu().numpy())
+            labels.append(batch["label"].cpu().numpy())
+    X = np.concatenate(feats, axis=0).astype(np.float64, copy=False)
+    y = np.concatenate(labels, axis=0).astype(np.int64, copy=False)
+    return X, y
+
+
+def _build_clip_text_features(
+    clip_module,
+    model,
+    device: torch.device,
+    class_names: List[str],
+    templates: List[str],
+) -> torch.Tensor:
+    text_features: List[torch.Tensor] = []
+    with torch.no_grad():
+        for cls in class_names:
+            prompts = [tmpl.format(cls) for tmpl in templates]
+            tokens = clip_module.tokenize(prompts).to(device)
+            feats = model.encode_text(tokens).float()
+            feats = feats / feats.norm(dim=-1, keepdim=True)
+            cls_feat = feats.mean(dim=0)
+            cls_feat = cls_feat / cls_feat.norm(dim=-1, keepdim=True)
+            text_features.append(cls_feat)
+    return torch.stack(text_features, dim=0)
+
+
 class MethodRunnerBase:
     name: str
 
     def predict_and_saliency(
-        self, image_tensor: torch.Tensor, label: int, target_mode: str
+        self,
+        image_tensor: torch.Tensor,
+        label: int,
+        target_mode: str,
+        pil_image: Optional[Image.Image] = None,
     ) -> Tuple[int, int, np.ndarray]:
         raise NotImplementedError
 
@@ -294,7 +429,7 @@ class GuidedRunner(MethodRunnerBase):
     def __init__(self, checkpoint: Path, num_classes: int, device: torch.device):
         self.device = device
         self.model = GuidedResNetCAM(num_classes).to(device)
-        state = torch.load(checkpoint, map_location=device)
+        state = torch_load_compat(checkpoint, device)
         state_dict = extract_state_dict(state) if isinstance(state, dict) else state
         state_dict = align_state_dict_keys(state_dict, self.model)
         self.model.load_state_dict(state_dict, strict=False)
@@ -302,7 +437,11 @@ class GuidedRunner(MethodRunnerBase):
 
     @torch.no_grad()
     def predict_and_saliency(
-        self, image_tensor: torch.Tensor, label: int, target_mode: str
+        self,
+        image_tensor: torch.Tensor,
+        label: int,
+        target_mode: str,
+        pil_image: Optional[Image.Image] = None,
     ) -> Tuple[int, int, np.ndarray]:
         logits, feats = self.model(image_tensor)
         pred = int(logits.argmax(dim=1).item())
@@ -319,7 +458,7 @@ class VanillaRunner(MethodRunnerBase):
         self.device = device
         self.model = models.resnet50(pretrained=False).to(device)
         self.model.fc = nn.Linear(self.model.fc.in_features, num_classes).to(device)
-        state = torch.load(checkpoint, map_location=device)
+        state = torch_load_compat(checkpoint, device)
         state_dict = extract_state_dict(state) if isinstance(state, dict) else state
         state_dict = align_state_dict_keys(state_dict, self.model)
         self.model.load_state_dict(state_dict, strict=False)
@@ -328,7 +467,11 @@ class VanillaRunner(MethodRunnerBase):
 
     @torch.no_grad()
     def predict_and_saliency(
-        self, image_tensor: torch.Tensor, label: int, target_mode: str
+        self,
+        image_tensor: torch.Tensor,
+        label: int,
+        target_mode: str,
+        pil_image: Optional[Image.Image] = None,
     ) -> Tuple[int, int, np.ndarray]:
         logits = self.model(image_tensor)
         if self.hook.features is None:
@@ -349,7 +492,7 @@ class GALSRunner(MethodRunnerBase):
     def __init__(self, checkpoint: Path, device: torch.device):
         self.device = device
         self.model = GALSBinaryCAMModel().to(device)
-        ckpt = torch.load(checkpoint, map_location=device)
+        ckpt = torch_load_compat(checkpoint, device)
         state = extract_state_dict(ckpt)
         state = align_state_dict_keys(state, self.model)
         self.model.load_state_dict(state, strict=False)
@@ -357,7 +500,11 @@ class GALSRunner(MethodRunnerBase):
 
     @torch.no_grad()
     def predict_and_saliency(
-        self, image_tensor: torch.Tensor, label: int, target_mode: str
+        self,
+        image_tensor: torch.Tensor,
+        label: int,
+        target_mode: str,
+        pil_image: Optional[Image.Image] = None,
     ) -> Tuple[int, int, np.ndarray]:
         logits, feats = self.model(image_tensor)
         prob_1 = torch.sigmoid(logits[:, 0])
@@ -385,13 +532,13 @@ class AFRRunner(MethodRunnerBase):
         afr_models = _import_afr_models(afr_root)
         self.model = getattr(afr_models, "imagenet_resnet50_pretrained")(num_classes).to(device)
 
-        stage1 = torch.load(stage1_checkpoint, map_location=device)
+        stage1 = torch_load_compat(stage1_checkpoint, device)
         state_dict = extract_state_dict(stage1) if isinstance(stage1, dict) else stage1
         state_dict = align_state_dict_keys(state_dict, self.model)
         self.model.load_state_dict(state_dict, strict=False)
 
         if stage2_last_layer_checkpoint is not None:
-            ll_obj = torch.load(stage2_last_layer_checkpoint, map_location=device)
+            ll_obj = torch_load_compat(stage2_last_layer_checkpoint, device)
             ll_state = extract_state_dict(ll_obj) if isinstance(ll_obj, dict) else ll_obj
             if "weight" in ll_state and "bias" in ll_state:
                 with torch.no_grad():
@@ -407,7 +554,11 @@ class AFRRunner(MethodRunnerBase):
 
     @torch.no_grad()
     def predict_and_saliency(
-        self, image_tensor: torch.Tensor, label: int, target_mode: str
+        self,
+        image_tensor: torch.Tensor,
+        label: int,
+        target_mode: str,
+        pil_image: Optional[Image.Image] = None,
     ) -> Tuple[int, int, np.ndarray]:
         logits = self.model(image_tensor)
         if self.hook.features is None:
@@ -420,6 +571,183 @@ class AFRRunner(MethodRunnerBase):
 
     def close(self) -> None:
         self.hook.close()
+
+
+class UpweightRunner(VanillaRunner):
+    name = "upweight"
+
+
+class ABNRunner(MethodRunnerBase):
+    name = "abn"
+
+    def __init__(self, checkpoint: Path, num_classes: int, device: torch.device):
+        self.device = device
+        self.model = resnet50_abn(pretrained=False, num_classes=num_classes, add_after_attention=True).to(device)
+        state = torch_load_compat(checkpoint, device)
+        state_dict = extract_state_dict(state) if isinstance(state, dict) else state
+        state_dict = align_state_dict_keys(state_dict, self.model)
+        self.model.load_state_dict(state_dict, strict=False)
+        self.model.eval()
+
+    @torch.no_grad()
+    def predict_and_saliency(
+        self,
+        image_tensor: torch.Tensor,
+        label: int,
+        target_mode: str,
+        pil_image: Optional[Image.Image] = None,
+    ) -> Tuple[int, int, np.ndarray]:
+        _att_logits, logits, extra = self.model(image_tensor, provided_att=None)
+        pred = int(logits.argmax(dim=1).item())
+        target = int(label if target_mode == "label" else pred)
+        att = extra[0]  # Bx1xhxw
+        sal = att[0, 0].detach().cpu().numpy().astype(np.float32)
+        sal = normalize_map(sal)
+        return pred, target, sal
+
+
+class ClipZeroShotRunner(MethodRunnerBase):
+    name = "clip_zs"
+
+    def __init__(
+        self,
+        clip_model_name: str,
+        class_names: List[str],
+        templates: List[str],
+        device: torch.device,
+    ):
+        self.device = device
+        self.clip = _try_import_clip()
+        try:
+            self.model, self.preprocess = self.clip.load(clip_model_name, device=str(device), jit=False)
+        except TypeError:
+            self.model, self.preprocess = self.clip.load(clip_model_name, device=str(device))
+        self.model.eval()
+        for p in self.model.parameters():
+            p.requires_grad_(False)
+        self.text_features = _build_clip_text_features(
+            self.clip,
+            self.model,
+            device=device,
+            class_names=class_names,
+            templates=templates,
+        )  # [2, d]
+
+    def predict_and_saliency(
+        self,
+        image_tensor: torch.Tensor,
+        label: int,
+        target_mode: str,
+        pil_image: Optional[Image.Image] = None,
+    ) -> Tuple[int, int, np.ndarray]:
+        if pil_image is None:
+            raise RuntimeError("ClipZeroShotRunner requires pil_image input.")
+        x = self.preprocess(pil_image).unsqueeze(0).to(self.device)
+        x.requires_grad_(True)
+
+        feats = self.model.encode_image(x).float()
+        feats = feats / feats.norm(dim=-1, keepdim=True)
+        logits = feats @ self.text_features.T
+
+        pred = int(torch.argmax(logits, dim=1).item())
+        target = int(label if target_mode == "label" else pred)
+        score = logits[0, target]
+
+        if x.grad is not None:
+            x.grad.zero_()
+        self.model.zero_grad()
+        score.backward()
+        sal = x.grad.detach().abs().mean(dim=1)[0].cpu().numpy().astype(np.float32)
+        sal = normalize_map(sal)
+        return pred, target, sal
+
+
+class ClipLRRunner(MethodRunnerBase):
+    name = "clip_lr"
+
+    def __init__(
+        self,
+        dataset_path: Path,
+        clip_model_name: str,
+        C: float,
+        penalty: str,
+        solver: str,
+        fit_intercept: bool,
+        tol: float,
+        max_iter: int,
+        class_weight: Optional[str],
+        device: torch.device,
+        batch_size: int,
+        num_workers: int,
+    ):
+        from sklearn.linear_model import LogisticRegression
+
+        self.device = device
+        self.clip = _try_import_clip()
+        try:
+            self.model, self.preprocess = self.clip.load(clip_model_name, device=str(device), jit=False)
+        except TypeError:
+            self.model, self.preprocess = self.clip.load(clip_model_name, device=str(device))
+        self.model.eval()
+        for p in self.model.parameters():
+            p.requires_grad_(False)
+
+        root, cfg, Waterbirds = _load_waterbirds_for_clip(str(dataset_path))
+        train_ds = Waterbirds(root=root, cfg=cfg, split="train", transform=self.preprocess)
+        X_train, y_train = _extract_clip_features(
+            dataset=train_ds,
+            model=self.model,
+            device=device,
+            batch_size=batch_size,
+            num_workers=num_workers,
+        )
+
+        clf = LogisticRegression(
+            C=float(C),
+            penalty=str(penalty),
+            solver=str(solver),
+            fit_intercept=bool(fit_intercept),
+            class_weight=class_weight,
+            tol=float(tol),
+            max_iter=int(max_iter),
+            random_state=0,
+        )
+        clf.fit(X_train, y_train)
+
+        # Binary LR in sklearn stores one weight vector for positive class.
+        w = clf.coef_[0].astype(np.float32)
+        b = float(clf.intercept_[0]) if clf.fit_intercept else 0.0
+        self.w = torch.from_numpy(w).to(device)  # [d]
+        self.b = torch.tensor(b, device=device, dtype=torch.float32)
+
+    def predict_and_saliency(
+        self,
+        image_tensor: torch.Tensor,
+        label: int,
+        target_mode: str,
+        pil_image: Optional[Image.Image] = None,
+    ) -> Tuple[int, int, np.ndarray]:
+        if pil_image is None:
+            raise RuntimeError("ClipLRRunner requires pil_image input.")
+        x = self.preprocess(pil_image).unsqueeze(0).to(self.device)
+        x.requires_grad_(True)
+
+        feats = self.model.encode_image(x).float()
+        feats = feats / feats.norm(dim=-1, keepdim=True)
+
+        # Binary decision score for class 1.
+        s = (feats[0] * self.w).sum() + self.b
+        pred = int((s >= 0).long().item())
+        target = int(label if target_mode == "label" else pred)
+        score = s if target == 1 else -s
+
+        if x.grad is not None:
+            x.grad.zero_()
+        self.model.zero_grad()
+        score.backward()
+        sal = x.grad.detach().abs().mean(dim=1)[0].cpu().numpy().astype(np.float32)
+        sal = normalize_map(sal)
+        return pred, target, sal
 
 
 @dataclass
@@ -499,12 +827,13 @@ def evaluate_dataset(
         mask_missing = mask_path is None
 
         image_tensor: Optional[torch.Tensor] = None
+        pil_image: Optional[Image.Image] = None
         mask_bin: Optional[np.ndarray] = None
 
         if not image_missing:
             try:
-                pil = open_pil_with_retry(image_path, mode="RGB")
-                image_tensor = preprocess(pil).unsqueeze(0).to(device)
+                pil_image = open_pil_with_retry(image_path, mode="RGB")
+                image_tensor = preprocess(pil_image).unsqueeze(0).to(device)
             except Exception:
                 image_missing = True
 
@@ -527,10 +856,16 @@ def evaluate_dataset(
                 st.missing_masks += 1
                 continue
             assert image_tensor is not None
+            assert pil_image is not None
             assert mask_bin is not None
 
             try:
-                pred, target, saliency = runner.predict_and_saliency(image_tensor, label, target_mode)
+                pred, target, saliency = runner.predict_and_saliency(
+                    image_tensor,
+                    label,
+                    target_mode,
+                    pil_image=pil_image,
+                )
                 saliency = upsample_saliency(saliency, 224, 224)
                 hit = pointing_hit(saliency, mask_bin)
             except Exception:
@@ -591,7 +926,10 @@ def evaluate_dataset(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Pointing Game evaluator for Waterbirds 95/100 across vanilla, GALS, guided, AFR."
+        description=(
+            "Pointing Game evaluator for Waterbirds 95/100 across guided/vanilla/gals/afr/"
+            "upweight/abn/clip_zs/clip_lr."
+        )
     )
     parser.add_argument(
         "--datasets",
@@ -624,6 +962,38 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vanilla100-ckpt", default="")
     parser.add_argument("--gals95-ckpt", default="")
     parser.add_argument("--gals100-ckpt", default="")
+    parser.add_argument("--upweight95-ckpt", default="")
+    parser.add_argument("--upweight100-ckpt", default="")
+    parser.add_argument("--abn95-ckpt", default="")
+    parser.add_argument("--abn100-ckpt", default="")
+
+    parser.add_argument("--clip-model", default="RN50")
+    parser.add_argument("--clip-batch-size", type=int, default=256)
+    parser.add_argument("--clip-num-workers", type=int, default=4)
+    parser.add_argument("--clip-class-names", default="landbird,waterbird")
+    parser.add_argument(
+        "--clip-template",
+        action="append",
+        default=[],
+        help="Prompt template with '{}' placeholder (can be passed multiple times).",
+    )
+
+    # CLIP-LR fixed hyperparameters by dataset (WB95/WB100)
+    parser.add_argument("--clip-lr95-C", type=float, default=30.481669053249504)
+    parser.add_argument("--clip-lr95-penalty", default="l2")
+    parser.add_argument("--clip-lr95-solver", default="lbfgs")
+    parser.add_argument("--clip-lr95-fit-intercept", type=int, default=1)
+    parser.add_argument("--clip-lr95-tol", type=float, default=1e-4)
+    parser.add_argument("--clip-lr95-max-iter", type=int, default=5000)
+    parser.add_argument("--clip-lr95-class-weight", default="none", choices=["none", "balanced"])
+
+    parser.add_argument("--clip-lr100-C", type=float, default=0.2515000498909345)
+    parser.add_argument("--clip-lr100-penalty", default="l2")
+    parser.add_argument("--clip-lr100-solver", default="lbfgs")
+    parser.add_argument("--clip-lr100-fit-intercept", type=int, default=1)
+    parser.add_argument("--clip-lr100-tol", type=float, default=1e-4)
+    parser.add_argument("--clip-lr100-max-iter", type=int, default=5000)
+    parser.add_argument("--clip-lr100-class-weight", default="none", choices=["none", "balanced"])
 
     parser.add_argument("--afr-root", default=str((PARENT_DIR / "afr").resolve()))
     parser.add_argument("--afr95-stage1-ckpt", default="")
@@ -646,6 +1016,7 @@ def _resolve_ckpt(path: str) -> Optional[Path]:
 def _build_runners_for_dataset(
     *,
     dataset_tag: str,
+    dataset_path: Path,
     num_classes: int,
     methods: Iterable[str],
     args: argparse.Namespace,
@@ -657,14 +1028,32 @@ def _build_runners_for_dataset(
         guided_ckpt = args.guided95_ckpt
         vanilla_ckpt = args.vanilla95_ckpt
         gals_ckpt = args.gals95_ckpt
+        upweight_ckpt = args.upweight95_ckpt
+        abn_ckpt = args.abn95_ckpt
         afr_stage1_ckpt = args.afr95_stage1_ckpt
         afr_last_layer_ckpt = args.afr95_last_layer_ckpt
+        clip_lr_C = args.clip_lr95_C
+        clip_lr_penalty = args.clip_lr95_penalty
+        clip_lr_solver = args.clip_lr95_solver
+        clip_lr_fit_intercept = bool(args.clip_lr95_fit_intercept)
+        clip_lr_tol = args.clip_lr95_tol
+        clip_lr_max_iter = args.clip_lr95_max_iter
+        clip_lr_class_weight = None if args.clip_lr95_class_weight == "none" else args.clip_lr95_class_weight
     else:
         guided_ckpt = args.guided100_ckpt
         vanilla_ckpt = args.vanilla100_ckpt
         gals_ckpt = args.gals100_ckpt
+        upweight_ckpt = args.upweight100_ckpt
+        abn_ckpt = args.abn100_ckpt
         afr_stage1_ckpt = args.afr100_stage1_ckpt
         afr_last_layer_ckpt = args.afr100_last_layer_ckpt
+        clip_lr_C = args.clip_lr100_C
+        clip_lr_penalty = args.clip_lr100_penalty
+        clip_lr_solver = args.clip_lr100_solver
+        clip_lr_fit_intercept = bool(args.clip_lr100_fit_intercept)
+        clip_lr_tol = args.clip_lr100_tol
+        clip_lr_max_iter = args.clip_lr100_max_iter
+        clip_lr_class_weight = None if args.clip_lr100_class_weight == "none" else args.clip_lr100_class_weight
 
     if "guided" in methods:
         p = _resolve_ckpt(guided_ckpt)
@@ -687,6 +1076,20 @@ def _build_runners_for_dataset(
         else:
             print(f"[WARN] Missing GALS checkpoint for dataset {dataset_tag}; skipping gals.", flush=True)
 
+    if "upweight" in methods:
+        p = _resolve_ckpt(upweight_ckpt)
+        if p is not None:
+            runners["upweight"] = UpweightRunner(p, num_classes=num_classes, device=device)
+        else:
+            print(f"[WARN] Missing upweight checkpoint for dataset {dataset_tag}; skipping upweight.", flush=True)
+
+    if "abn" in methods:
+        p = _resolve_ckpt(abn_ckpt)
+        if p is not None:
+            runners["abn"] = ABNRunner(p, num_classes=num_classes, device=device)
+        else:
+            print(f"[WARN] Missing ABN checkpoint for dataset {dataset_tag}; skipping abn.", flush=True)
+
     if "afr" in methods:
         p1 = _resolve_ckpt(afr_stage1_ckpt)
         p2 = _resolve_ckpt(afr_last_layer_ckpt)
@@ -704,6 +1107,37 @@ def _build_runners_for_dataset(
                 f"[WARN] Missing AFR stage1 checkpoint for dataset {dataset_tag}; skipping afr.",
                 flush=True,
             )
+
+    if "clip_zs" in methods:
+        class_names = _parse_csv_list(args.clip_class_names)
+        if len(class_names) != 2:
+            raise ValueError("--clip-class-names must contain exactly 2 class names for Waterbirds.")
+        templates = args.clip_template if args.clip_template else _default_clip_templates()
+        for t in templates:
+            if "{}" not in t:
+                raise ValueError(f"Template missing '{{}}' placeholder: {t}")
+        runners["clip_zs"] = ClipZeroShotRunner(
+            clip_model_name=args.clip_model,
+            class_names=class_names,
+            templates=templates,
+            device=device,
+        )
+
+    if "clip_lr" in methods:
+        runners["clip_lr"] = ClipLRRunner(
+            dataset_path=dataset_path,
+            clip_model_name=args.clip_model,
+            C=clip_lr_C,
+            penalty=clip_lr_penalty,
+            solver=clip_lr_solver,
+            fit_intercept=clip_lr_fit_intercept,
+            tol=clip_lr_tol,
+            max_iter=clip_lr_max_iter,
+            class_weight=clip_lr_class_weight,
+            device=device,
+            batch_size=int(args.clip_batch_size),
+            num_workers=int(args.clip_num_workers),
+        )
 
     return runners
 
@@ -773,6 +1207,7 @@ def main() -> None:
         num_classes = int(md["y"].nunique())
         runners = _build_runners_for_dataset(
             dataset_tag=d,
+            dataset_path=data_path,
             num_classes=num_classes,
             methods=methods,
             args=args,

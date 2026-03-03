@@ -178,3 +178,60 @@ for i in "${!RUN_LABELS[@]}"; do
   echo "  checkpoint: ${RUN_CKPTS[$i]}"
 done
 echo "==========================="
+
+UP95_CKPT="${RUN_CKPTS[0]:-}"
+UP100_CKPT="${RUN_CKPTS[1]:-}"
+ABN95_CKPT="${RUN_CKPTS[2]:-}"
+ABN100_CKPT="${RUN_CKPTS[3]:-}"
+
+if [[ "${RUN_POINTING_GAME:-1}" == "1" ]]; then
+  for req in "$UP95_CKPT" "$UP100_CKPT" "$ABN95_CKPT" "$ABN100_CKPT"; do
+    if [[ -z "$req" || ! -f "$req" ]]; then
+      echo "[ERROR] Missing retrained checkpoint needed for pointing game: $req" >&2
+      exit 2
+    fi
+  done
+
+  WB95_DATA_PATH="${WB95_DATA_PATH:-$DATA_ROOT/waterbird_complete95_forest2water2}"
+  WB100_DATA_PATH="${WB100_DATA_PATH:-$DATA_ROOT/waterbird_1.0_forest2water2}"
+  CUB_MASK_ROOT="${CUB_MASK_ROOT:-$DATA_ROOT/CUB_200_2011/segmentations}"
+  WB95_MASK_ROOT="${WB95_MASK_ROOT:-$CUB_MASK_ROOT}"
+  WB100_MASK_ROOT="${WB100_MASK_ROOT:-$CUB_MASK_ROOT}"
+  PG_OUT_DIR="${PG_OUT_DIR:-$LOG_DIR/waterbirds_pointing_game_up_abn_clip_${JOB_TAG}}"
+
+  echo
+  echo "===== POINTING GAME ====="
+  echo "WB95 upweight: $UP95_CKPT"
+  echo "WB100 upweight: $UP100_CKPT"
+  echo "WB95 abn: $ABN95_CKPT"
+  echo "WB100 abn: $ABN100_CKPT"
+  echo "Output: $PG_OUT_DIR"
+  echo "========================="
+
+  python -u waterbirds_pointing_game_eval.py \
+    --datasets "${PG_DATASETS:-95,100}" \
+    --split "${PG_SPLIT:-test}" \
+    --target-mode "${PG_TARGET_MODE:-label}" \
+    --max-samples "${PG_MAX_SAMPLES:-0}" \
+    --sample-seed "${PG_SAMPLE_SEED:-0}" \
+    --seed "${PG_SEED:-0}" \
+    --methods "${PG_METHODS:-upweight,abn,clip_zs,clip_lr}" \
+    --wb95-data-path "$WB95_DATA_PATH" \
+    --wb100-data-path "$WB100_DATA_PATH" \
+    --wb95-mask-root "$WB95_MASK_ROOT" \
+    --wb100-mask-root "$WB100_MASK_ROOT" \
+    --upweight95-ckpt "$UP95_CKPT" \
+    --upweight100-ckpt "$UP100_CKPT" \
+    --abn95-ckpt "$ABN95_CKPT" \
+    --abn100-ckpt "$ABN100_CKPT" \
+    --clip-model "${PG_CLIP_MODEL:-RN50}" \
+    --clip-lr95-C "${PG_CLIP_LR95_C:-30.481669053249504}" \
+    --clip-lr95-penalty "${PG_CLIP_LR95_PENALTY:-l2}" \
+    --clip-lr95-solver "${PG_CLIP_LR95_SOLVER:-lbfgs}" \
+    --clip-lr95-fit-intercept "${PG_CLIP_LR95_FIT_INTERCEPT:-1}" \
+    --clip-lr100-C "${PG_CLIP_LR100_C:-0.2515000498909345}" \
+    --clip-lr100-penalty "${PG_CLIP_LR100_PENALTY:-l2}" \
+    --clip-lr100-solver "${PG_CLIP_LR100_SOLVER:-lbfgs}" \
+    --clip-lr100-fit-intercept "${PG_CLIP_LR100_FIT_INTERCEPT:-1}" \
+    --output-dir "$PG_OUT_DIR"
+fi
