@@ -2,7 +2,7 @@
 # Train guided + vanilla + GALS-ViT WB100 models, then generate saliency visualizations.
 
 #SBATCH --account=reu-aisocial
-#SBATCH --partition=debug
+#SBATCH --partition=tier3
 #SBATCH --gres=gpu:a100:1
 #SBATCH --time=2:00:00
 #SBATCH --ntasks=1
