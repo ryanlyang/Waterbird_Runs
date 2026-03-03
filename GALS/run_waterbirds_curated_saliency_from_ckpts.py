@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass
 from datetime import datetime
@@ -98,6 +99,43 @@ def canonical_token(rel_path: str) -> str:
     return f"{p.parent.name}__{p.stem}_jpg"
 
 
+def normalize_token_text(text: str) -> str:
+    t = str(text).strip().lower()
+    t = t.replace("\\", "/")
+    t = t.replace(".jpg", "_jpg").replace(".jpeg", "_jpeg").replace(".png", "_png")
+    # Normalize all separators/punctuation to underscores.
+    t = re.sub(r"[^a-z0-9]+", "_", t)
+    t = re.sub(r"_+", "_", t).strip("_")
+    return t
+
+
+def token_variants_from_relpath(rel_path: str) -> List[str]:
+    p = Path(rel_path)
+    parent = p.parent.name
+    stem = p.stem
+    parent_us = parent.replace(".", "_")
+    parent_wo_prefix = re.sub(r"^\d+[._]", "", parent)
+    parent_us_wo_prefix = re.sub(r"^\d+_", "", parent_us)
+
+    variants = [
+        f"{parent}__{stem}_jpg",
+        f"{parent_us}__{stem}_jpg",
+        f"{parent_us}_{stem}_jpg",  # mask-like single join
+        f"{parent_wo_prefix}__{stem}_jpg",
+        f"{parent_us_wo_prefix}__{stem}_jpg",
+        f"{stem}_jpg",
+        rel_path,
+    ]
+    # Deduplicate while preserving order.
+    seen = set()
+    out: List[str] = []
+    for v in variants:
+        if v not in seen:
+            seen.add(v)
+            out.append(v)
+    return out
+
+
 def _strip_module_prefix(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
     if not state_dict:
         return state_dict
@@ -146,25 +184,32 @@ def resolve_rows_from_tokens(
     metadata_df: pd.DataFrame,
     split_code: int,
     curated: Dict[str, List[str]],
-) -> Tuple[List[Dict[str, object]], List[Dict[str, str]]]:
+) -> Tuple[List[Dict[str, object]], List[Dict[str, str]], Dict[str, object]]:
     val_df = metadata_df[metadata_df["split"].astype(int) == int(split_code)].copy()
     if val_df.empty:
         raise RuntimeError(f"No rows for split code {split_code} in metadata.csv")
 
-    tok_to_row: Dict[str, pd.Series] = {}
+    tok_to_rows: Dict[str, List[pd.Series]] = {}
+    preview_tokens: List[str] = []
     for _, row in val_df.iterrows():
-        tok = canonical_token(str(row["img_filename"]))
-        tok_to_row[tok.lower()] = row
+        rel = str(row["img_filename"])
+        # Keep a small preview for debug.
+        if len(preview_tokens) < 16:
+            preview_tokens.append(canonical_token(rel))
+        for tok in token_variants_from_relpath(rel):
+            key = normalize_token_text(tok)
+            tok_to_rows.setdefault(key, []).append(row)
 
     selected: List[Dict[str, object]] = []
     missing: List[Dict[str, str]] = []
     for category, tokens in curated.items():
         for tok in tokens:
-            key = tok.lower().strip()
-            row = tok_to_row.get(key)
-            if row is None:
+            key = normalize_token_text(tok)
+            matches = tok_to_rows.get(key, [])
+            if not matches:
                 missing.append({"category": category, "token": tok})
                 continue
+            row = matches[0]
             selected.append(
                 {
                     "category": category,
@@ -175,7 +220,12 @@ def resolve_rows_from_tokens(
                     "group": int(int(row["y"]) * 2 + int(row["place"])),
                 }
             )
-    return selected, missing
+    debug = {
+        "val_rows": int(len(val_df)),
+        "lookup_keys": int(len(tok_to_rows)),
+        "preview_canonical_tokens": preview_tokens,
+    }
+    return selected, missing, debug
 
 
 def run_dataset(
@@ -201,7 +251,7 @@ def run_dataset(
     metadata_df = pd.read_csv(metadata_path)
 
     # Validation only (user-specified)
-    selected, missing = resolve_rows_from_tokens(metadata_df, split_code=1, curated=spec.curated)
+    selected, missing, debug = resolve_rows_from_tokens(metadata_df, split_code=1, curated=spec.curated)
     print(
         f"[DATASET {spec.tag}] selected={len(selected)} missing={len(missing)} "
         f"(from val split only)",
@@ -209,7 +259,11 @@ def run_dataset(
     )
 
     if not selected:
-        raise RuntimeError(f"No curated images resolved for dataset {spec.tag}.")
+        raise RuntimeError(
+            f"No curated images resolved for dataset {spec.tag}. "
+            f"Debug: val_rows={debug['val_rows']} lookup_keys={debug['lookup_keys']} "
+            f"preview={debug['preview_canonical_tokens']}"
+        )
 
     ds_out = out_dir / f"waterbirds_{spec.tag}"
     samples_dir = ds_out / "samples"
@@ -350,6 +404,7 @@ def run_dataset(
         "num_generated": int(len(rows_out)),
         "num_missing": int(len(missing)),
         "missing_tokens": missing,
+        "match_debug": debug,
         "guided_checkpoint": str(spec.guided_ckpt),
         "vanilla_checkpoint": str(spec.vanilla_ckpt),
         "gals_vit_checkpoint": str(spec.gals_ckpt),
@@ -513,4 +568,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
