@@ -12,6 +12,7 @@ import argparse
 import os
 import random
 from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
 from typing import Tuple
 
@@ -242,7 +243,7 @@ def train_one_seed(args, seed: int, full_train: GuidedImageFolder, test_dataset:
 
     model.load_state_dict(best_weights)
     _, test_acc = evaluate(model, test_loader, device)
-    return best_val_acc, test_acc, best_epoch
+    return best_val_acc, test_acc, best_epoch, deepcopy(best_weights)
 
 
 def main() -> None:
@@ -275,6 +276,12 @@ def main() -> None:
     parser.add_argument("--print-every", type=int, default=1)
     parser.add_argument("--no-progress-bar", action="store_true", default=False)
     parser.add_argument("--no-cuda", action="store_true", default=False)
+    parser.add_argument(
+        "--checkpoint-dir",
+        type=str,
+        default="DecoyMNIST_GALS_Checkpoints",
+        help="Directory to save best-val checkpoint per seed.",
+    )
     args = parser.parse_args()
 
     use_cuda = not args.no_cuda and torch.cuda.is_available()
@@ -300,11 +307,16 @@ def main() -> None:
         f"loss_mode={args.loss_mode} grad_weight={args.grad_weight} grad_criterion={args.grad_criterion} "
         f"cam_weight={args.cam_weight} cam_criterion={args.cam_criterion} cam_mode={args.cam_mode}"
     )
+    print(f"checkpoint_dir={args.checkpoint_dir}")
+
+    ckpt_dir = Path(args.checkpoint_dir).expanduser().resolve()
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    run_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     rows = []
     for i in range(args.n_seeds):
         seed = args.seed_start + i
-        best_val_acc, test_acc, best_epoch = train_one_seed(
+        best_val_acc, test_acc, best_epoch, best_weights = train_one_seed(
             args=args,
             seed=seed,
             full_train=full_train,
@@ -312,10 +324,29 @@ def main() -> None:
             device=device,
             loader_kwargs=loader_kwargs,
         )
+
+        ckpt_name = (
+            f"decoymnist_{args.loss_mode}_seed{seed}_"
+            f"bestval_{best_val_acc:.2f}_epoch{best_epoch}_{run_ts}.pth"
+        )
+        ckpt_path = ckpt_dir / ckpt_name
+        torch.save(
+            {
+                "model_state_dict": best_weights,
+                "seed": int(seed),
+                "best_val_acc": float(best_val_acc),
+                "best_epoch": int(best_epoch),
+                "test_acc": float(test_acc),
+                "args": vars(args),
+            },
+            ckpt_path,
+        )
+
         rows.append((seed, best_val_acc, test_acc, best_epoch))
         print(
             f"seed={seed} best_val_acc={best_val_acc:.2f}% "
-            f"best_epoch={best_epoch} test_acc={test_acc:.2f}%"
+            f"best_epoch={best_epoch} test_acc={test_acc:.2f}% "
+            f"checkpoint={ckpt_path}"
         )
 
     vals = np.asarray([r[1] for r in rows], dtype=np.float64)
