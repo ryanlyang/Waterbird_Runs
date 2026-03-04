@@ -395,19 +395,50 @@ def save_gt_mask_variants(mask_path: Path, image_rgb: np.ndarray, sample_dir: Pa
     return True
 
 
-def _canonical_name(name: str) -> str:
-    stem = Path(str(name)).stem.strip().lower()
-    stem = re.sub(r"^\d+_", "", stem)
-    return stem
+def _normalize_text_token(text: str) -> str:
+    s = str(text).strip().lower()
+    s = s.replace("\\", "/")
+    s = re.sub(r"\.[a-z0-9]+$", "", s)  # drop file extension
+    s = s.replace("/", "_")
+    s = re.sub(r"_+", "_", s).strip("_")
+    s = re.sub(r"^\d+_", "", s)  # tolerate optional leading numeric prefix
+    return s
 
 
 def _name_variants(name: str) -> Set[str]:
-    s = _canonical_name(name)
-    out = {s}
-    for suf in ("_jpg", "_jpeg", "_png"):
-        if s.endswith(suf):
-            out.add(s[: -len(suf)])
-    return out
+    """
+    Produce robust matching keys from either:
+    - a curated token (e.g. baby_back_ribs_1941026_jpg)
+    - a full file path (e.g. /.../baby_back_ribs/1941026.jpg)
+    """
+    p = Path(str(name))
+    out: Set[str] = set()
+
+    # Raw token/path normalized forms.
+    raw = _normalize_text_token(str(name))
+    if raw:
+        out.add(raw)
+
+    # Basename and stem variants.
+    basename = _normalize_text_token(p.name)
+    stem = _normalize_text_token(p.stem)
+    if basename:
+        out.add(basename)
+    if stem:
+        out.add(stem)
+
+    # Parent + stem is critical when filenames are numeric (e.g., class/1941026.jpg).
+    if p.parent and str(p.parent) not in (".", ""):
+        parent_name = _normalize_text_token(p.parent.name)
+        if parent_name and stem:
+            out.add(f"{parent_name}_{stem}")
+
+    # If token ends with _jpg/_jpeg/_png, also allow stripped form.
+    for v in list(out):
+        for suf in ("_jpg", "_jpeg", "_png"):
+            if v.endswith(suf):
+                out.add(v[: -len(suf)])
+    return {x for x in out if x}
 
 
 def _resolve_curated_indices(paths: Sequence[str], requested_tokens: Sequence[str]) -> Tuple[List[int], List[str]]:
@@ -498,6 +529,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--data-path", default="/workspace/data/food-101-redmeat")
     p.add_argument("--guided-gt-root", default="/workspace/data/results_redmeat_openclip_dinovit/val/prediction_cmap")
     p.add_argument("--output-dir", default="")
+    p.add_argument("--split", choices=["train", "val", "test", "all"], default="val")
     p.add_argument("--classes", default=DEFAULT_CLASSES)
     p.add_argument("--target-class", choices=["label", "pred"], default="label")
     p.add_argument("--sample-seed", type=int, default=0)
@@ -571,22 +603,35 @@ def main() -> None:
     print(f"[INFO] guided_gt_root={gt_root}", flush=True)
     print(f"[INFO] output_dir={out_dir}", flush=True)
 
-    val_ds = rgm.RedMeatMetadataDataset(
-        data_root=str(data_path),
-        split="val",
-        image_transform=_build_eval_transform(),
-        return_mask=False,
-        return_path=True,
-        classes=[c.strip() for c in str(args.classes).split(",") if c.strip()],
-        split_col="split",
-        label_col="label",
-        path_col="abs_file_path",
-    )
-    num_classes = len(val_ds.classes)
-    print(f"[INFO] num_classes={num_classes} classes={val_ds.classes}", flush=True)
+    class_list = [c.strip() for c in str(args.classes).split(",") if c.strip()]
+    eval_tf = _build_eval_transform()
+
+    split_list = ["train", "val", "test"] if args.split == "all" else [str(args.split)]
+    pool_paths: List[str] = []
+    pool_labels: List[int] = []
+    pool_label_names: List[str] = []
+    for sp in split_list:
+        ds = rgm.RedMeatMetadataDataset(
+            data_root=str(data_path),
+            split=sp,
+            image_transform=None,
+            return_mask=False,
+            return_path=True,
+            classes=class_list,
+            split_col="split",
+            label_col="label",
+            path_col="abs_file_path",
+        )
+        pool_paths.extend([str(x) for x in ds.paths])
+        pool_labels.extend([int(x) for x in ds.labels.tolist()])
+        pool_label_names.extend([str(x) for x in ds.label_names])
+
+    num_classes = len(class_list)
+    print(f"[INFO] split_pool={split_list} pool_size={len(pool_paths)}", flush=True)
+    print(f"[INFO] num_classes={num_classes} classes={class_list}", flush=True)
 
     requested_tokens = [x.strip() for x in str(args.image_names).split(",") if x.strip()]
-    selected_indices, missing = _resolve_curated_indices(val_ds.paths, requested_tokens)
+    selected_indices, missing = _resolve_curated_indices(pool_paths, requested_tokens)
     if missing:
         msg = f"[WARN] Missing {len(missing)} requested images: {missing}"
         if not args.allow_missing:
@@ -695,10 +740,10 @@ def main() -> None:
     sample_rows: List[Dict[str, object]] = []
 
     for i, idx in enumerate(selected_indices):
-        image_t, label, img_path_str = val_ds[idx]
-        img_path = Path(str(img_path_str))
-        label = int(label)
-        class_name = str(val_ds.classes[label])
+        img_path = Path(str(pool_paths[idx]))
+        label = int(pool_labels[idx])
+        class_name = str(pool_label_names[idx])
+        image_t = eval_tf(Image.open(img_path).convert("RGB"))
         image_rgb = np.array(Image.open(img_path).convert("RGB"), dtype=np.uint8)
         input_tensor = image_t.unsqueeze(0).to(device)
 
@@ -749,7 +794,9 @@ def main() -> None:
         "guided_gt_root": str(gt_root),
         "output_dir": str(out_dir),
         "target_class_mode": args.target_class,
-        "classes": list(val_ds.classes),
+        "split": str(args.split),
+        "split_pool": split_list,
+        "classes": list(class_list),
         "requested_image_names": requested_tokens,
         "resolved_count": int(len(selected_indices)),
         "missing_image_names": missing,
