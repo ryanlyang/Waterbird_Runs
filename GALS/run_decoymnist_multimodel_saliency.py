@@ -264,8 +264,12 @@ def gradcam_single(model: nn.Module, layer: nn.Module, x: torch.Tensor, target_c
         fmap = feats[-1]
         grad = grads[-1]
         weights = grad.mean(dim=(2, 3), keepdim=True)
-        cam = (weights * fmap).sum(dim=1, keepdim=True)
-        cam = F.relu(cam)
+        cam_raw = (weights * fmap).sum(dim=1, keepdim=True)
+        cam = F.relu(cam_raw)
+        # Fallback: if ReLU fully wipes the CAM (common for weak/negative evidence),
+        # use absolute raw CAM so saliency is still informative instead of all-zero.
+        if float(cam.max().detach().item()) <= 0.0:
+            cam = torch.abs(cam_raw)
         cam = F.interpolate(cam, size=x.shape[-2:], mode="bilinear", align_corners=False)
         cam = cam.squeeze(0).squeeze(0).detach().cpu().numpy().astype(np.float32)
         cam = norm01(cam)
@@ -278,13 +282,12 @@ def gradcam_single(model: nn.Module, layer: nn.Module, x: torch.Tensor, target_c
 # -------------------------- Dataset sampling --------------------------------
 
 
-def build_val_samples(
+def build_val_pool_by_digit(
     png_root: Path,
     val_frac: float,
     split_seed: int,
-    per_digit: int,
     sample_seed: int,
-) -> List[Tuple[int, Path, int]]:
+) -> Dict[int, List[Tuple[int, Path, int]]]:
     full = ImageFolder(str(png_root / "train"), transform=None)
     n_total = len(full)
     n_val = int(val_frac * n_total)
@@ -302,19 +305,21 @@ def build_val_samples(
         class_to_items[int(label)].append((local_idx, Path(path_str), int(label)))
 
     rng = np.random.default_rng(sample_seed)
-    chosen: List[Tuple[int, Path, int]] = []
     for digit in range(10):
         items = class_to_items.get(digit, [])
-        if len(items) == 0:
+        if len(items) <= 1:
             continue
-        take = min(per_digit, len(items))
-        idxs = rng.choice(len(items), size=take, replace=False)
-        for j in idxs.tolist():
-            chosen.append(items[j])
+        order = rng.permutation(len(items)).tolist()
+        class_to_items[digit] = [items[i] for i in order]
+    return class_to_items
 
-    # Stable order: class then path.
-    chosen.sort(key=lambda t: (t[2], str(t[1])))
-    return chosen
+
+def saliency_is_nonzero(sal: np.ndarray, eps: float) -> bool:
+    if sal.size == 0:
+        return False
+    mx = float(np.max(sal))
+    mass = float(np.sum(sal))
+    return (mx > eps) and (mass > eps)
 
 
 # ------------------------------- Main ---------------------------------------
@@ -330,6 +335,24 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--sample-seed", type=int, default=0)
     p.add_argument("--target-class", choices=["label", "pred"], default="label")
     p.add_argument("--device", default="cuda:0")
+    p.add_argument(
+        "--sample-filter",
+        choices=["none", "all_nonzero"],
+        default="all_nonzero",
+        help="Filter sampled examples by saliency quality across models.",
+    )
+    p.add_argument(
+        "--nonzero-eps",
+        type=float,
+        default=1e-8,
+        help="Minimum saliency peak/sum threshold for non-zero filtering.",
+    )
+    p.add_argument(
+        "--max-candidates-per-digit",
+        type=int,
+        default=2000,
+        help="Upper bound on candidates scanned per digit when filtering.",
+    )
 
     p.add_argument(
         "--guided-ckpt",
@@ -436,23 +459,89 @@ def run() -> None:
         ModelSpec("upweight", upweight_ckpt, upweight),
     ]
 
-    picked = build_val_samples(
+    by_digit = build_val_pool_by_digit(
         png_root=png_root,
         val_frac=float(args.val_frac),
         split_seed=int(args.split_seed),
-        per_digit=int(args.per_digit),
         sample_seed=int(args.sample_seed),
     )
-    if not picked:
-        raise RuntimeError("No validation samples selected.")
+    if not any(len(v) > 0 for v in by_digit.values()):
+        raise RuntimeError("No validation samples available.")
 
     tf = Compose([Grayscale(num_output_channels=1), ToTensor(), Lambda(lambda t: t * 2.0 - 1.0)])
 
+    # Select examples per digit, optionally enforcing saliency non-zero across all models.
+    selected: List[Dict[str, object]] = []
+    dropped_zero = 0
+    scanned_total = 0
+    per_digit_shortfall: Dict[int, int] = {}
+
+    for digit in range(10):
+        items = by_digit.get(digit, [])
+        want = int(args.per_digit)
+        if want <= 0:
+            continue
+        kept_for_digit = 0
+        scanned_for_digit = 0
+        max_scan = min(len(items), int(args.max_candidates_per_digit))
+
+        for (_local_idx, img_path, label) in items[:max_scan]:
+            scanned_total += 1
+            scanned_for_digit += 1
+            pil = Image.open(img_path).convert("L")
+            x = tf(pil).unsqueeze(0).to(device)
+            rgb = np.repeat(np.array(pil, dtype=np.uint8)[:, :, None], 3, axis=2)
+
+            preds: Dict[str, int] = {}
+            targets: Dict[str, int] = {}
+            sal_maps: Dict[str, np.ndarray] = {}
+            all_nonzero = True
+
+            for spec in specs:
+                model = spec.model
+                pred = infer_pred(model, x)
+                target_cls = int(label) if args.target_class == "label" else int(pred)
+                sal = gradcam_single(model, model.conv2, x, target_class=target_cls)
+                preds[spec.name] = int(pred)
+                targets[spec.name] = int(target_cls)
+                sal_maps[spec.name] = sal
+                if args.sample_filter == "all_nonzero" and (not saliency_is_nonzero(sal, eps=float(args.nonzero_eps))):
+                    all_nonzero = False
+
+            if args.sample_filter == "all_nonzero" and not all_nonzero:
+                dropped_zero += 1
+                continue
+
+            selected.append(
+                {
+                    "img_path": img_path,
+                    "label": int(label),
+                    "rgb": rgb,
+                    "preds": preds,
+                    "targets": targets,
+                    "sal_maps": sal_maps,
+                }
+            )
+            kept_for_digit += 1
+            if kept_for_digit >= want:
+                break
+
+        if kept_for_digit < want:
+            per_digit_shortfall[digit] = want - kept_for_digit
+
+    if not selected:
+        raise RuntimeError(
+            f"No samples passed filtering. filter={args.sample_filter} eps={args.nonzero_eps} scanned={scanned_total}"
+        )
+
     rows = []
-    for k, (_local_idx, img_path, label) in enumerate(picked):
-        pil = Image.open(img_path).convert("L")
-        x = tf(pil).unsqueeze(0).to(device)
-        rgb = np.repeat(np.array(pil, dtype=np.uint8)[:, :, None], 3, axis=2)
+    for k, rec in enumerate(selected):
+        img_path = Path(str(rec["img_path"]))
+        label = int(rec["label"])
+        rgb = rec["rgb"]
+        preds = rec["preds"]
+        targets = rec["targets"]
+        sal_maps = rec["sal_maps"]
 
         sample_name = f"{k:03d}_digit{label}_{img_path.stem}"
         sd = samples_dir / sample_name
@@ -466,14 +555,10 @@ def run() -> None:
         }
 
         for spec in specs:
-            model = spec.model
-            pred = infer_pred(model, x)
-            target_cls = int(label) if args.target_class == "label" else int(pred)
-            sal = gradcam_single(model, model.conv2, x, target_class=target_cls)
+            sal = sal_maps[spec.name]
             save_saliency_variants(spec.name, sal, rgb, sd)
-
-            info[f"{spec.name}_pred"] = int(pred)
-            info[f"{spec.name}_target_for_saliency"] = int(target_cls)
+            info[f"{spec.name}_pred"] = int(preds[spec.name])
+            info[f"{spec.name}_target_for_saliency"] = int(targets[spec.name])
 
         with open(sd / "sample_info.json", "w", encoding="utf-8") as f:
             json.dump(info, f, indent=2)
@@ -496,12 +581,22 @@ def run() -> None:
         "sample_seed": int(args.sample_seed),
         "target_class_mode": args.target_class,
         "num_samples": len(rows),
+        "sample_filter": args.sample_filter,
+        "nonzero_eps": float(args.nonzero_eps),
+        "scanned_total": int(scanned_total),
+        "dropped_zero": int(dropped_zero),
+        "per_digit_shortfall": {str(k): int(v) for k, v in per_digit_shortfall.items()},
         "checkpoints": {spec.name: str(spec.ckpt_path) for spec in specs},
     }
     with open(out_dir / "run_summary.json", "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
 
-    print(f"[DONE] samples={len(rows)} out_dir={out_dir}")
+    print(
+        f"[DONE] samples={len(rows)} out_dir={out_dir} "
+        f"filter={args.sample_filter} scanned={scanned_total} dropped_zero={dropped_zero}"
+    )
+    if per_digit_shortfall:
+        print(f"[WARN] per-digit shortfall={per_digit_shortfall}")
     print(f"[DONE] sample_index={csv_path}")
 
 
