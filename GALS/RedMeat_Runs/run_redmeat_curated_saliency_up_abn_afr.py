@@ -575,6 +575,99 @@ class EvalModelSpec:
     load_meta: Dict[str, object]
 
 
+@dataclass
+class CuratedEntry:
+    request_token: str
+    image_path: str
+    label: int
+    class_name: str
+    source: str  # metadata | filesystem
+
+
+def _strip_image_suffix(token_norm: str) -> str:
+    for suf in ("_jpg", "_jpeg", "_png"):
+        if token_norm.endswith(suf):
+            return token_norm[: -len(suf)]
+    return token_norm
+
+
+def _resolve_token_from_filesystem(
+    token: str,
+    data_path: Path,
+    class_list: Sequence[str],
+    class_to_idx: Dict[str, int],
+) -> Optional[CuratedEntry]:
+    token_norm = _strip_image_suffix(_normalize_text_token(token))
+    if not token_norm:
+        return None
+
+    class_norm_to_name = {_normalize_text_token(c): c for c in class_list}
+    # Prefer longest class-name prefix match to avoid partial collisions.
+    sorted_class_norm = sorted(class_norm_to_name.keys(), key=len, reverse=True)
+
+    matched_class_norm = None
+    image_id = None
+    for cn in sorted_class_norm:
+        if token_norm.startswith(cn + "_"):
+            matched_class_norm = cn
+            image_id = token_norm[len(cn) + 1 :]
+            break
+
+    ext_list = [".jpg", ".jpeg", ".png", ".JPG", ".JPEG", ".PNG"]
+    search_roots = [data_path / "images", data_path]
+
+    if matched_class_norm is not None and image_id:
+        class_name = class_norm_to_name[matched_class_norm]
+        for root in search_roots:
+            cls_dir = root / class_name
+            if not cls_dir.is_dir():
+                continue
+            for ext in ext_list:
+                cand = cls_dir / f"{image_id}{ext}"
+                if cand.is_file():
+                    return CuratedEntry(
+                        request_token=token,
+                        image_path=str(cand.resolve()),
+                        label=int(class_to_idx[class_name]),
+                        class_name=class_name,
+                        source="filesystem",
+                    )
+
+    # Generic fallback: search by basename id under images tree.
+    # Keep this narrow to avoid expensive broad scans.
+    target_ids = []
+    if image_id:
+        target_ids.append(image_id)
+    target_ids.append(token_norm)
+    # Deduplicate while preserving order.
+    seen_ids: Set[str] = set()
+    target_ids = [x for x in target_ids if x and not (x in seen_ids or seen_ids.add(x))]
+
+    for root in search_roots:
+        if not root.is_dir():
+            continue
+        for tid in target_ids:
+            for ext in ext_list:
+                pattern = f"{tid}{ext}"
+                try:
+                    for cand in root.rglob(pattern):
+                        if not cand.is_file():
+                            continue
+                        parent_norm = _normalize_text_token(cand.parent.name)
+                        if parent_norm in class_norm_to_name:
+                            class_name = class_norm_to_name[parent_norm]
+                            return CuratedEntry(
+                                request_token=token,
+                                image_path=str(cand.resolve()),
+                                label=int(class_to_idx[class_name]),
+                                class_name=class_name,
+                                source="filesystem",
+                            )
+                except Exception:
+                    continue
+    return None
+
+
 def main() -> None:
     args = parse_args()
     set_seed(int(args.sample_seed))
@@ -631,15 +724,48 @@ def main() -> None:
     print(f"[INFO] num_classes={num_classes} classes={class_list}", flush=True)
 
     requested_tokens = [x.strip() for x in str(args.image_names).split(",") if x.strip()]
-    selected_indices, missing = _resolve_curated_indices(pool_paths, requested_tokens)
+    class_to_idx = {c: i for i, c in enumerate(class_list)}
+
+    selected_entries: List[CuratedEntry] = []
+    missing: List[str] = []
+
+    # Resolve each token in order: metadata first, then direct filesystem fallback.
+    for tok in requested_tokens:
+        idx_list, _ = _resolve_curated_indices(pool_paths, [tok])
+        if idx_list:
+            i0 = int(idx_list[0])
+            selected_entries.append(
+                CuratedEntry(
+                    request_token=tok,
+                    image_path=str(pool_paths[i0]),
+                    label=int(pool_labels[i0]),
+                    class_name=str(pool_label_names[i0]),
+                    source="metadata",
+                )
+            )
+            continue
+
+        fs_entry = _resolve_token_from_filesystem(tok, data_path=data_path, class_list=class_list, class_to_idx=class_to_idx)
+        if fs_entry is not None:
+            selected_entries.append(fs_entry)
+            continue
+
+        missing.append(tok)
+
     if missing:
         msg = f"[WARN] Missing {len(missing)} requested images: {missing}"
         if not args.allow_missing:
             raise RuntimeError(msg)
         print(msg, flush=True)
-    if not selected_indices:
-        raise RuntimeError("No curated images resolved from val split.")
-    print(f"[INFO] Resolved {len(selected_indices)}/{len(requested_tokens)} curated images from val split.", flush=True)
+    if not selected_entries:
+        raise RuntimeError("No curated images resolved from requested list.")
+    n_meta = sum(1 for e in selected_entries if e.source == "metadata")
+    n_fs = sum(1 for e in selected_entries if e.source == "filesystem")
+    print(
+        f"[INFO] Resolved {len(selected_entries)}/{len(requested_tokens)} curated images "
+        f"(metadata={n_meta}, filesystem_fallback={n_fs}).",
+        flush=True,
+    )
 
     req_device = str(args.device)
     if req_device.startswith("cuda") and not torch.cuda.is_available():
@@ -739,10 +865,10 @@ def main() -> None:
     use_label_target = args.target_class == "label"
     sample_rows: List[Dict[str, object]] = []
 
-    for i, idx in enumerate(selected_indices):
-        img_path = Path(str(pool_paths[idx]))
-        label = int(pool_labels[idx])
-        class_name = str(pool_label_names[idx])
+    for i, entry in enumerate(selected_entries):
+        img_path = Path(str(entry.image_path))
+        label = int(entry.label)
+        class_name = str(entry.class_name)
         image_t = eval_tf(Image.open(img_path).convert("RGB"))
         image_rgb = np.array(Image.open(img_path).convert("RGB"), dtype=np.uint8)
         input_tensor = image_t.unsqueeze(0).to(device)
@@ -764,7 +890,8 @@ def main() -> None:
         vis_by_model: Dict[str, Dict[str, np.ndarray]] = {}
         info: Dict[str, object] = {
             "index": int(i),
-            "val_dataset_index": int(idx),
+            "request_token": str(entry.request_token),
+            "resolved_source": str(entry.source),
             "image_path": str(img_path),
             "label": int(label),
             "class_name": class_name,
@@ -798,7 +925,9 @@ def main() -> None:
         "split_pool": split_list,
         "classes": list(class_list),
         "requested_image_names": requested_tokens,
-        "resolved_count": int(len(selected_indices)),
+        "resolved_count": int(len(selected_entries)),
+        "resolved_from_metadata": int(sum(1 for e in selected_entries if e.source == "metadata")),
+        "resolved_from_filesystem_fallback": int(sum(1 for e in selected_entries if e.source == "filesystem")),
         "missing_image_names": missing,
         "rise": {
             "num_masks": int(args.rise_num_masks),
@@ -820,7 +949,8 @@ def main() -> None:
     csv_path = out_dir / "sample_index.csv"
     fieldnames = [
         "index",
-        "val_dataset_index",
+        "request_token",
+        "resolved_source",
         "image_path",
         "label",
         "class_name",
