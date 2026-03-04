@@ -5,10 +5,11 @@ from __future__ import annotations
 
 import argparse
 import csv
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 import torch
@@ -75,6 +76,7 @@ class ModelSpec:
     name: str
     model: nn.Module
     ckpt: Path
+    seed: Optional[int]
 
 
 def _torch_load(path: Path):
@@ -146,9 +148,31 @@ def model_logits(model: nn.Module, x: torch.Tensor) -> torch.Tensor:
     return out
 
 
+def _extract_seed_from_path(path: Path) -> Optional[int]:
+    m = re.search(r"seed[_-]?(\d+)", path.name)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"seed[_-]?(\d+)", str(path.parent))
+    if m:
+        return int(m.group(1))
+    return None
+
+
+def _parse_ckpt_list(text: str) -> List[Path]:
+    items = [x.strip() for x in str(text).split(",") if x.strip()]
+    return [Path(x).expanduser().resolve() for x in items]
+
+
+def _class_name(classes: List[str], idx: int) -> str:
+    if 0 <= idx < len(classes):
+        return str(classes[idx])
+    return str(idx)
+
+
 def evaluate_model(model: nn.Module, loader: DataLoader, device: torch.device, num_classes: int = 10):
     correct = np.zeros(num_classes, dtype=np.int64)
     total = np.zeros(num_classes, dtype=np.int64)
+    confusion = np.zeros((num_classes, num_classes), dtype=np.int64)
 
     model.eval()
     with torch.no_grad():
@@ -157,6 +181,9 @@ def evaluate_model(model: nn.Module, loader: DataLoader, device: torch.device, n
             y = y.to(device)
             logits = model_logits(model, x)
             pred = logits.argmax(dim=1)
+            y_np = y.detach().cpu().numpy().astype(np.int64, copy=False)
+            pred_np = pred.detach().cpu().numpy().astype(np.int64, copy=False)
+            np.add.at(confusion, (y_np, pred_np), 1)
 
             for c in range(num_classes):
                 mask = y.eq(c)
@@ -176,7 +203,39 @@ def evaluate_model(model: nn.Module, loader: DataLoader, device: torch.device, n
     worst = float(np.min(finite)) if finite else float("nan")
     mean_cls = float(np.mean(finite)) if finite else float("nan")
     overall = 100.0 * float(correct.sum()) / float(max(1, total.sum()))
-    return overall, mean_cls, worst, class_acc
+    worst_idx = int(np.nanargmin(np.asarray(class_acc, dtype=np.float64)))
+    worst_total = int(total[worst_idx])
+    worst_correct = int(correct[worst_idx])
+    worst_errors = int(max(0, worst_total - worst_correct))
+
+    mis = confusion[worst_idx].copy()
+    if 0 <= worst_idx < mis.shape[0]:
+        mis[worst_idx] = 0
+    if int(mis.sum()) > 0:
+        top_mis_idx = int(np.argmax(mis))
+        top_mis_count = int(mis[top_mis_idx])
+        top_mis_pct_of_errors = 100.0 * float(top_mis_count) / float(max(1, mis.sum()))
+        top_mis_pct_of_group = 100.0 * float(top_mis_count) / float(max(1, worst_total))
+    else:
+        top_mis_idx = -1
+        top_mis_count = 0
+        top_mis_pct_of_errors = 0.0
+        top_mis_pct_of_group = 0.0
+
+    return {
+        "overall": overall,
+        "mean_cls": mean_cls,
+        "worst_acc": worst,
+        "class_acc": class_acc,
+        "worst_idx": worst_idx,
+        "worst_total": worst_total,
+        "worst_correct": worst_correct,
+        "worst_errors": worst_errors,
+        "top_mis_idx": top_mis_idx,
+        "top_mis_count": top_mis_count,
+        "top_mis_pct_of_errors": top_mis_pct_of_errors,
+        "top_mis_pct_of_group": top_mis_pct_of_group,
+    }
 
 
 def parse_args() -> argparse.Namespace:
@@ -215,30 +274,60 @@ def main() -> None:
         pin_memory=bool(device.type == "cuda"),
     )
 
-    specs = [
-        ModelSpec("guided", LeNet().to(device), Path(args.guided_ckpt).expanduser().resolve()),
-        ModelSpec("vanilla", LeNet().to(device), Path(args.vanilla_ckpt).expanduser().resolve()),
-        ModelSpec("gals", LeNet().to(device), Path(args.gals_ckpt).expanduser().resolve()),
-        ModelSpec("afr", LeNet().to(device), Path(args.afr_ckpt).expanduser().resolve()),
-        ModelSpec("abn", ABNLeNet().to(device), Path(args.abn_ckpt).expanduser().resolve()),
-        ModelSpec("upweight", LeNet().to(device), Path(args.upweight_ckpt).expanduser().resolve()),
-    ]
+    def _expand_specs(model_name: str, model_ctor, ckpt_text: str) -> List[ModelSpec]:
+        out: List[ModelSpec] = []
+        for ckpt_path in _parse_ckpt_list(ckpt_text):
+            seed = _extract_seed_from_path(ckpt_path)
+            suffix = f"_seed{seed}" if seed is not None else ""
+            out.append(ModelSpec(f"{model_name}{suffix}", model_ctor().to(device), ckpt_path, seed))
+        return out
+
+    specs: List[ModelSpec] = []
+    specs.extend(_expand_specs("guided", LeNet, args.guided_ckpt))
+    specs.extend(_expand_specs("vanilla", LeNet, args.vanilla_ckpt))
+    specs.extend(_expand_specs("gals", LeNet, args.gals_ckpt))
+    specs.extend(_expand_specs("afr", LeNet, args.afr_ckpt))
+    specs.extend(_expand_specs("abn", ABNLeNet, args.abn_ckpt))
+    specs.extend(_expand_specs("upweight", LeNet, args.upweight_ckpt))
 
     rows = []
     print(f"[INFO] device={device}")
     print(f"[INFO] test_size={len(test_ds)}")
+    print(f"[INFO] classes={test_ds.classes}")
     for spec in specs:
         if not spec.ckpt.is_file():
             raise FileNotFoundError(f"Missing checkpoint for {spec.name}: {spec.ckpt}")
         load_checkpoint_flex(spec.model, spec.ckpt)
 
-        overall, mean_cls, worst, class_acc = evaluate_model(spec.model, test_loader, device, num_classes=10)
+        metrics = evaluate_model(spec.model, test_loader, device, num_classes=10)
+        overall = float(metrics["overall"])
+        mean_cls = float(metrics["mean_cls"])
+        worst = float(metrics["worst_acc"])
+        class_acc = list(metrics["class_acc"])
+        worst_idx = int(metrics["worst_idx"])
+        top_mis_idx = int(metrics["top_mis_idx"])
+
+        top_mis_name = _class_name(test_ds.classes, top_mis_idx) if top_mis_idx >= 0 else "none"
+        top_mis_count = int(metrics["top_mis_count"])
+        top_mis_pct_err = float(metrics["top_mis_pct_of_errors"])
+        top_mis_pct_group = float(metrics["top_mis_pct_of_group"])
+
         row = {
             "model": spec.name,
+            "seed": ("" if spec.seed is None else int(spec.seed)),
             "checkpoint": str(spec.ckpt),
             "test_acc": overall,
             "test_mean_class_acc": mean_cls,
             "test_worst_class_acc": worst,
+            "worst_group_idx": worst_idx,
+            "worst_group_name": _class_name(test_ds.classes, worst_idx),
+            "worst_group_total": int(metrics["worst_total"]),
+            "worst_group_errors": int(metrics["worst_errors"]),
+            "worst_group_top_miscls_idx": ("" if top_mis_idx < 0 else top_mis_idx),
+            "worst_group_top_miscls_name": top_mis_name,
+            "worst_group_top_miscls_count": top_mis_count,
+            "worst_group_top_miscls_pct_of_errors": top_mis_pct_err,
+            "worst_group_top_miscls_pct_of_group": top_mis_pct_group,
         }
         for c, v in enumerate(class_acc):
             row[f"class_{c}_acc"] = v
@@ -246,7 +335,9 @@ def main() -> None:
 
         print(
             f"[RESULT] {spec.name:8s} test_acc={overall:6.2f}% "
-            f"mean_class={mean_cls:6.2f}% worst_class={worst:6.2f}%"
+            f"mean_class={mean_cls:6.2f}% worst_group={worst_idx}({row['worst_group_name']}) "
+            f"worst_acc={worst:6.2f}% top_miscls={top_mis_name} "
+            f"(count={top_mis_count}, pct_errors={top_mis_pct_err:5.2f}%, pct_group={top_mis_pct_group:5.2f}%)"
         )
 
     if args.output_csv:
