@@ -38,6 +38,10 @@ import torch
 import torch.nn as nn
 from torchvision import models as tv_models
 from torchvision import transforms
+try:
+    import yaml  # type: ignore
+except Exception:
+    yaml = None
 
 
 _THIS_DIR = Path(__file__).resolve().parent
@@ -524,6 +528,192 @@ def _load_best_of_builders(
     return best_model, best_meta
 
 
+def _extract_last_layer_weight_bias(state_dict: Dict[str, torch.Tensor]) -> Optional[Tuple[torch.Tensor, torch.Tensor]]:
+    for cand in _candidate_state_dicts(state_dict):
+        w = cand.get("weight", None)
+        b = cand.get("bias", None)
+        if isinstance(w, torch.Tensor) and isinstance(b, torch.Tensor) and w.ndim == 2 and b.ndim == 1:
+            return w, b
+    # Some checkpoints may use fc.* keys directly.
+    for cand in _candidate_state_dicts(state_dict):
+        w = cand.get("fc.weight", None)
+        b = cand.get("fc.bias", None)
+        if isinstance(w, torch.Tensor) and isinstance(b, torch.Tensor) and w.ndim == 2 and b.ndim == 1:
+            return w, b
+    return None
+
+
+def _read_json_dict(path: Path) -> Dict[str, object]:
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            obj = json.load(f)
+        return obj if isinstance(obj, dict) else {}
+    except Exception:
+        return {}
+
+
+def _read_yaml_dict(path: Path) -> Dict[str, object]:
+    if yaml is None:
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            obj = yaml.safe_load(f)
+        return obj if isinstance(obj, dict) else {}
+    except Exception:
+        return {}
+
+
+def _infer_afr_stage1_ckpt(afr_ckpt: Path) -> Tuple[Optional[Path], Dict[str, object]]:
+    info: Dict[str, object] = {"afr_ckpt_parent": str(afr_ckpt.parent)}
+    parent = afr_ckpt.parent
+
+    # 1) Read sidecar metadata produced by AFR train_embeddings.py
+    args_json = parent / "args.json"
+    meta_yaml = parent / "meta.yaml"
+    cfg: Dict[str, object] = {}
+    if args_json.is_file():
+        cfg = _read_json_dict(args_json)
+        info["sidecar"] = str(args_json)
+    if not cfg and meta_yaml.is_file():
+        cfg = _read_yaml_dict(meta_yaml)
+        if cfg:
+            info["sidecar"] = str(meta_yaml)
+
+    base_model_dir = str(cfg.get("base_model_dir", "")).strip() if cfg else ""
+    if base_model_dir:
+        base_dir = Path(base_model_dir).expanduser()
+        if not base_dir.is_absolute():
+            base_dir = (parent / base_dir).resolve()
+        else:
+            base_dir = base_dir.resolve()
+        info["base_model_dir"] = str(base_dir)
+        for name in ("final_checkpoint.pt", "best_checkpoint.pt", "resumable_checkpoint.pt"):
+            cand = base_dir / name
+            if cand.is_file():
+                info["stage1_source"] = "base_model_dir"
+                return cand, info
+
+    # 2) Heuristics for copied SavedChecks layouts
+    seed = None
+    m = re.search(r"seed[_-]?(\d+)", parent.name)
+    if m:
+        seed = m.group(1)
+        info["seed_inferred"] = seed
+
+    roots = [parent.parent, parent.parent.parent]
+    candidates: List[Path] = []
+    for root in roots:
+        if root is None or not root.exists():
+            continue
+        if seed is not None:
+            candidates.extend(
+                [
+                    root / f"seed_{seed}" / "final_checkpoint.pt",
+                    root / f"seed{seed}" / "final_checkpoint.pt",
+                    root / "stage1" / f"seed_{seed}" / "final_checkpoint.pt",
+                    root / "stage1" / f"seed{seed}" / "final_checkpoint.pt",
+                ]
+            )
+        candidates.extend(
+            [
+                root / "seed_0" / "final_checkpoint.pt",
+                root / "seed0" / "final_checkpoint.pt",
+                root / "stage1" / "seed_0" / "final_checkpoint.pt",
+                root / "stage1" / "seed0" / "final_checkpoint.pt",
+            ]
+        )
+
+    seen: Set[str] = set()
+    for cand in candidates:
+        key = str(cand)
+        if key in seen:
+            continue
+        seen.add(key)
+        if cand.is_file():
+            info["stage1_source"] = "heuristic"
+            return cand.resolve(), info
+
+    info["stage1_source"] = "not_found"
+    return None, info
+
+
+def _load_afr_model(
+    afr_ckpt: Path,
+    builders: Sequence[Tuple[str, callable]],
+    device: torch.device,
+    stage1_ckpt_override: str = "",
+) -> Tuple[nn.Module, Dict[str, object]]:
+    afr_obj = torch_load_compat(afr_ckpt, device)
+    afr_state = extract_state_dict(afr_obj)
+
+    # Try direct full-model load first.
+    try:
+        model, meta = _load_best_of_builders(afr_ckpt, builders=builders, device=device)
+        meta = dict(meta)
+        meta["afr_load_mode"] = "direct_full_model"
+        return model, meta
+    except Exception as direct_exc:
+        direct_err = str(direct_exc)
+
+    # If direct load failed, see if this is a stage-2 last-layer checkpoint.
+    ll = _extract_last_layer_weight_bias(afr_state)
+    if ll is None:
+        raise RuntimeError(
+            f"Could not load AFR checkpoint as full model and did not detect last-layer-only state: {afr_ckpt}"
+        )
+    ll_w, ll_b = ll
+
+    # Find stage-1 checkpoint.
+    stage1_ckpt: Optional[Path] = None
+    stage1_meta: Dict[str, object] = {}
+    if stage1_ckpt_override:
+        p = Path(stage1_ckpt_override).expanduser().resolve()
+        if p.is_file():
+            stage1_ckpt = p
+            stage1_meta["stage1_source"] = "user_override"
+        else:
+            raise FileNotFoundError(f"--afr-stage1-ckpt provided but missing: {p}")
+    else:
+        stage1_ckpt, stage1_meta = _infer_afr_stage1_ckpt(afr_ckpt)
+        if stage1_ckpt is None:
+            raise RuntimeError(
+                "AFR checkpoint appears to be stage-2 last-layer only (weight/bias), "
+                "but stage-1 checkpoint could not be inferred. "
+                f"Provide --afr-stage1-ckpt. afr_ckpt={afr_ckpt} details={stage1_meta}"
+            )
+
+    model, meta = _load_best_of_builders(stage1_ckpt, builders=builders, device=device)
+    if not hasattr(model, "fc") or not isinstance(model.fc, nn.Linear):
+        raise RuntimeError("AFR reconstruction expects model.fc to be nn.Linear.")
+
+    fc: nn.Linear = model.fc
+    if tuple(fc.weight.shape) != tuple(ll_w.shape) or tuple(fc.bias.shape) != tuple(ll_b.shape):
+        raise RuntimeError(
+            "AFR stage-2 last-layer shape mismatch with stage-1 model head: "
+            f"fc.weight={tuple(fc.weight.shape)} ll_w={tuple(ll_w.shape)} "
+            f"fc.bias={tuple(fc.bias.shape)} ll_b={tuple(ll_b.shape)}"
+        )
+
+    with torch.no_grad():
+        fc.weight.copy_(ll_w.to(fc.weight.device, dtype=fc.weight.dtype))
+        fc.bias.copy_(ll_b.to(fc.bias.device, dtype=fc.bias.dtype))
+
+    meta = dict(meta)
+    meta.update(
+        {
+            "afr_load_mode": "stage1_plus_stage2_last_layer",
+            "afr_stage2_ckpt": str(afr_ckpt),
+            "afr_stage1_ckpt": str(stage1_ckpt),
+            "afr_stage2_weight_shape": list(ll_w.shape),
+            "afr_stage2_bias_shape": list(ll_b.shape),
+            "afr_direct_load_error": direct_err,
+        }
+    )
+    meta.update(stage1_meta)
+    model.eval()
+    return model, meta
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Curated RedMeat saliency for upweight/abn/afr checkpoints.")
     p.add_argument("--data-path", default="/workspace/data/food-101-redmeat")
@@ -545,6 +735,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--afr-ckpt",
         default="/workspace/SavedChecks/afr_redmeat/seed0_g5p5_r0p2/final_checkpoint.pt",
+    )
+    p.add_argument(
+        "--afr-stage1-ckpt",
+        default="",
+        help="Optional AFR stage-1 checkpoint (needed when --afr-ckpt is stage-2 last-layer only).",
     )
 
     p.add_argument(
@@ -807,13 +1002,14 @@ def main() -> None:
         ],
         device=device,
     )
-    afr_model, afr_meta = _load_best_of_builders(
-        afr_ckpt,
+    afr_model, afr_meta = _load_afr_model(
+        afr_ckpt=afr_ckpt,
         builders=[
             ("gals_resnet50", lambda: _make_generic_resnet50(num_classes)),
             ("torchvision_resnet50", lambda: _make_torchvision_resnet50(num_classes)),
         ],
         device=device,
+        stage1_ckpt_override=str(args.afr_stage1_ckpt),
     )
 
     print(f"[INFO] upweight load: {up_meta}", flush=True)
