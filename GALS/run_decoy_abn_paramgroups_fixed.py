@@ -66,20 +66,40 @@ def set_seed(seed):
 
 @torch.no_grad()
 def evaluate(model, loader, device):
+    avg_loss, acc, _, _ = evaluate_with_class_stats(model, loader, device, num_classes=10)
+    return avg_loss, acc
+
+
+@torch.no_grad()
+def evaluate_with_class_stats(model, loader, device, num_classes=10):
     model.eval()
     total = 0
     correct = 0
     loss_sum = 0.0
+    per_class_total = np.zeros((num_classes,), dtype=np.int64)
+    per_class_correct = np.zeros((num_classes,), dtype=np.int64)
     for data, target in loader:
         data = data.to(device)
         target = target.to(device)
         out_main, _ = model(data)
+        pred = out_main.argmax(dim=1)
         loss_sum += F.nll_loss(out_main, target, reduction="sum").item()
-        correct += out_main.argmax(dim=1).eq(target).sum().item()
+        correct += pred.eq(target).sum().item()
+        for c in range(num_classes):
+            mask = target.eq(c)
+            n = int(mask.sum().item())
+            if n > 0:
+                per_class_total[c] += n
+                per_class_correct[c] += int(pred[mask].eq(target[mask]).sum().item())
         total += data.size(0)
     avg_loss = loss_sum / max(total, 1)
     acc = 100.0 * correct / max(total, 1)
-    return avg_loss, acc
+    class_acc = np.full((num_classes,), np.nan, dtype=np.float64)
+    for c in range(num_classes):
+        if per_class_total[c] > 0:
+            class_acc[c] = 100.0 * float(per_class_correct[c]) / float(per_class_total[c])
+    worst_class_acc = float(np.nanmin(class_acc))
+    return avg_loss, acc, class_acc, worst_class_acc
 
 
 def train_one_seed(args, seed, full_train, test_dataset, device, loader_kwargs):
@@ -139,11 +159,22 @@ def train_one_seed(args, seed, full_train, test_dataset, device, loader_kwargs):
 
     assert best_weights is not None
     model.load_state_dict(best_weights)
-    _, test_acc = evaluate(model, test_loader, device)
-    return best_val_acc, test_acc, best_epoch, best_weights
+    _, test_acc, test_class_acc, test_worst_class_acc = evaluate_with_class_stats(
+        model, test_loader, device, num_classes=10
+    )
+    return best_val_acc, test_acc, test_worst_class_acc, test_class_acc, best_epoch, best_weights
 
 
-def _save_ckpt(save_dir, seed, best_epoch, best_val_acc, test_acc, abn_cls_weight, state_dict):
+def _save_ckpt(
+    save_dir,
+    seed,
+    best_epoch,
+    best_val_acc,
+    test_acc,
+    test_worst_class_acc,
+    abn_cls_weight,
+    state_dict,
+):
     os.makedirs(save_dir, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     path = os.path.join(
@@ -155,6 +186,7 @@ def _save_ckpt(save_dir, seed, best_epoch, best_val_acc, test_acc, abn_cls_weigh
         "best_epoch": int(best_epoch),
         "best_val_acc": float(best_val_acc),
         "test_acc": float(test_acc),
+        "test_worst_class_acc": float(test_worst_class_acc),
         "abn_cls_weight": float(abn_cls_weight),
         "state_dict": state_dict,
     }
@@ -204,7 +236,7 @@ def main():
     rows = []
     for i in range(args.n_seeds):
         seed = args.seed_start + i
-        best_val_acc, test_acc, best_epoch, best_weights = train_one_seed(
+        best_val_acc, test_acc, test_worst_class_acc, test_class_acc, best_epoch, best_weights = train_one_seed(
             args=args,
             seed=seed,
             full_train=full_train,
@@ -212,10 +244,12 @@ def main():
             device=device,
             loader_kwargs=loader_kwargs,
         )
-        rows.append((seed, best_val_acc, test_acc, best_epoch))
+        rows.append((seed, best_val_acc, test_acc, test_worst_class_acc, best_epoch))
         print(
             f"seed={seed} best_val_acc={best_val_acc:.2f}% "
-            f"best_epoch={best_epoch} test_acc={test_acc:.2f}%"
+            f"best_epoch={best_epoch} test_acc={test_acc:.2f}% "
+            f"test_worst_class_acc={test_worst_class_acc:.2f}% "
+            f"test_class_acc={np.array2string(test_class_acc, precision=2, separator=',')}"
         )
         if args.save_dir:
             ckpt_path = _save_ckpt(
@@ -224,6 +258,7 @@ def main():
                 best_epoch=best_epoch,
                 best_val_acc=best_val_acc,
                 test_acc=test_acc,
+                test_worst_class_acc=test_worst_class_acc,
                 abn_cls_weight=args.abn_cls_weight,
                 state_dict=best_weights,
             )
@@ -231,9 +266,11 @@ def main():
 
     vals = np.asarray([r[1] for r in rows], dtype=np.float64)
     tests = np.asarray([r[2] for r in rows], dtype=np.float64)
+    test_worsts = np.asarray([r[3] for r in rows], dtype=np.float64)
     print("\nSummary over seeds")
     print(f"val_acc  mean={vals.mean():.2f}% std={vals.std():.2f}%")
     print(f"test_acc mean={tests.mean():.2f}% std={tests.std():.2f}%")
+    print(f"test_worst_class_acc mean={test_worsts.mean():.2f}% std={test_worsts.std():.2f}%")
 
 
 if __name__ == "__main__":
