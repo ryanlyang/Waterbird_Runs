@@ -164,6 +164,127 @@ def metric_value(row, objective):
         return -1.0
 
 
+def _float_or_none(x):
+    try:
+        if x is None:
+            return None
+        s = str(x).strip()
+        if not s:
+            return None
+        return float(s)
+    except Exception:
+        return None
+
+
+def _build_resume_trial_from_row(row, *, args, grad_criteria):
+    import optuna
+
+    score = _float_or_none(row.get(args.objective))
+    if score is None or not np.isfinite(score):
+        return None
+
+    params = {}
+    dists = {}
+
+    base_lr = _float_or_none(row.get("base_lr"))
+    cls_lr = _float_or_none(row.get("classifier_lr"))
+    if base_lr is None or base_lr <= 0 or cls_lr is None or cls_lr <= 0:
+        return None
+    params["base_lr"] = float(base_lr)
+    params["classifier_lr"] = float(cls_lr)
+    dists["base_lr"] = optuna.distributions.FloatDistribution(
+        float(args.base_lr_min), float(args.base_lr_max), log=True
+    )
+    dists["classifier_lr"] = optuna.distributions.FloatDistribution(
+        float(args.cls_lr_min), float(args.cls_lr_max), log=True
+    )
+
+    if args.tune_weight_decay:
+        wd = _float_or_none(row.get("weight_decay"))
+        if wd is None or wd <= 0:
+            return None
+        params["weight_decay"] = float(wd)
+        dists["weight_decay"] = optuna.distributions.FloatDistribution(
+            float(args.weight_decay_min), float(args.weight_decay_max), log=True
+        )
+
+    if args.method in ("gals", "rrr"):
+        gw = _float_or_none(row.get("grad_weight"))
+        gc = str(row.get("grad_criterion", "")).strip().upper()
+        if gw is None or gw <= 0 or gc not in grad_criteria:
+            return None
+        params["grad_weight"] = float(gw)
+        params["grad_criterion"] = gc
+        dists["grad_weight"] = optuna.distributions.FloatDistribution(
+            float(args.weight_min), float(args.weight_max), log=True
+        )
+        dists["grad_criterion"] = optuna.distributions.CategoricalDistribution(list(grad_criteria))
+    elif args.method == "gradcam":
+        cw = _float_or_none(row.get("cam_weight"))
+        if cw is None or cw <= 0:
+            return None
+        params["cam_weight"] = float(cw)
+        dists["cam_weight"] = optuna.distributions.FloatDistribution(
+            float(args.cam_weight_min), float(args.cam_weight_max), log=True
+        )
+    elif args.method == "abn_cls":
+        aw = _float_or_none(row.get("abn_cls_weight"))
+        if aw is None or aw <= 0:
+            return None
+        params["abn_cls_weight"] = float(aw)
+        dists["abn_cls_weight"] = optuna.distributions.FloatDistribution(
+            float(args.abn_cls_weight_min), float(args.abn_cls_weight_max), log=True
+        )
+    elif args.method == "abn_att":
+        aw = _float_or_none(row.get("abn_att_weight"))
+        if aw is None or aw <= 0:
+            return None
+        params["abn_att_weight"] = float(aw)
+        dists["abn_att_weight"] = optuna.distributions.FloatDistribution(
+            float(args.abn_att_weight_min), float(args.abn_att_weight_max), log=True
+        )
+
+    try:
+        trial = optuna.trial.create_trial(
+            params=params,
+            distributions=dists,
+            value=float(score),
+            state=optuna.trial.TrialState.COMPLETE,
+            user_attrs={
+                "resumed_from_csv": True,
+                "orig_trial": row.get("trial"),
+                "orig_name": row.get("name"),
+            },
+        )
+    except Exception:
+        return None
+    return trial
+
+
+def load_resume_trials(csv_paths, *, args, grad_criteria):
+    trials = []
+    loaded = 0
+    skipped = 0
+    for csv_path in csv_paths:
+        if not os.path.isfile(csv_path):
+            print(f"[RESUME] CSV not found, skipping: {csv_path}", flush=True)
+            continue
+        try:
+            with open(csv_path, newline="") as f:
+                rows = list(csv.DictReader(f))
+        except Exception as exc:
+            print(f"[RESUME] Failed reading {csv_path}: {exc}", flush=True)
+            continue
+        for row in rows:
+            tr = _build_resume_trial_from_row(row, args=args, grad_criteria=grad_criteria)
+            if tr is None:
+                skipped += 1
+            else:
+                trials.append(tr)
+                loaded += 1
+    return trials, loaded, skipped
+
+
 def _parse_metric_line(line):
     # Matches lines like: "balanced_val_acc: 0.8123" or "test_acc: 0.901"
     parts = line.strip().split(":")
@@ -463,6 +584,14 @@ def main():
         "overrides",
         nargs=argparse.REMAINDER,
         help="Extra OmegaConf overrides passed through to main.py (e.g. DATA.SEGMENTATION_DIR=/path/to/masks).",
+    )
+    parser.add_argument(
+        "--resume-csv",
+        default="",
+        help=(
+            "Comma-separated prior sweep CSV paths to seed Optuna study before running new trials. "
+            "Useful for resume-like continuation after preemption."
+        ),
     )
     args = parser.parse_args()
 
@@ -864,7 +993,20 @@ def main():
                     study.stop()
             callbacks.append(_time_limit_cb)
 
-        study = optuna.create_study(direction="maximize")
+        study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=args.seed))
+        resume_csv_paths = parse_csv_list(args.resume_csv)
+        if resume_csv_paths:
+            resume_trials, n_loaded, n_skipped = load_resume_trials(
+                resume_csv_paths, args=args, grad_criteria=grad_criteria
+            )
+            if resume_trials:
+                for tr in resume_trials:
+                    study.add_trial(tr)
+            print(
+                f"[RESUME] Seeded Optuna study with {n_loaded} completed trial(s) from CSV. "
+                f"skipped={n_skipped}",
+                flush=True,
+            )
         study.optimize(
             objective,
             n_trials=args.n_trials,
