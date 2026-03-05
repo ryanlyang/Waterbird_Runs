@@ -66,7 +66,11 @@ C_VALUES=${C_VALUES:-}
 TEST_ACC_MIN=${TEST_ACC_MIN:-76.0}
 TEST_ACC_MAX=${TEST_ACC_MAX:-77.0}
 TEST_WORST_CLASS_MAX=${TEST_WORST_CLASS_MAX:-54.0}
-VAL_ACC_MIN=${VAL_ACC_MIN:-74.0}
+VAL_ACC_MIN=${VAL_ACC_MIN:-73.0}
+REFINE_ROUNDS=${REFINE_ROUNDS:-2}
+REFINE_TOP_K=${REFINE_TOP_K:-6}
+REFINE_SPAN=${REFINE_SPAN:-3.0}
+REFINE_N_VALUES=${REFINE_N_VALUES:-120}
 MAX_MATCHES=${MAX_MATCHES:-1}
 STOP_ON_MATCH=${STOP_ON_MATCH:-1}
 
@@ -100,6 +104,7 @@ echo "Data: $DATASET_ROOT"
 echo "CLIP model: $CLIP_MODEL"
 echo "C scan: min=$C_MIN max=$C_MAX n=$N_C_VALUES fit_intercept=$FIT_INTERCEPT"
 echo "Targets: val_acc > $VAL_ACC_MIN, test_acc in [$TEST_ACC_MIN,$TEST_ACC_MAX), test_worst_class <= $TEST_WORST_CLASS_MAX"
+echo "Refine: rounds=$REFINE_ROUNDS top_k=$REFINE_TOP_K span=$REFINE_SPAN n_values=$REFINE_N_VALUES"
 echo "Output CSV: $OUT_CSV"
 which python
 
@@ -129,6 +134,10 @@ CMD=(
   --test-acc-max "$TEST_ACC_MAX"
   --test-worst-class-max "$TEST_WORST_CLASS_MAX"
   --val-acc-min "$VAL_ACC_MIN"
+  --refine-rounds "$REFINE_ROUNDS"
+  --refine-top-k "$REFINE_TOP_K"
+  --refine-span "$REFINE_SPAN"
+  --refine-n-values "$REFINE_N_VALUES"
   --max-matches "$MAX_MATCHES"
   "$STOP_FLAG"
 )

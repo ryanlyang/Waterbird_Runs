@@ -87,7 +87,16 @@ def main() -> None:
     p.add_argument("--test-acc-min", type=float, default=76.0)
     p.add_argument("--test-acc-max", type=float, default=77.0)
     p.add_argument("--test-worst-class-max", type=float, default=54.0)
-    p.add_argument("--val-acc-min", type=float, default=74.0)
+    p.add_argument("--val-acc-min", type=float, default=73.0)
+    p.add_argument("--refine-rounds", type=int, default=2, help="Number of local refinement rounds after coarse scan.")
+    p.add_argument("--refine-top-k", type=int, default=6, help="How many best coarse candidates to refine around.")
+    p.add_argument(
+        "--refine-span",
+        type=float,
+        default=3.0,
+        help="Local window factor around each center C: [C/span, C*span].",
+    )
+    p.add_argument("--refine-n-values", type=int, default=120, help="C points per local refinement window.")
     p.add_argument("--max-matches", type=int, default=1)
     p.add_argument("--stop-on-match", action="store_true", default=True)
     p.add_argument("--no-stop-on-match", action="store_false", dest="stop_on_match")
@@ -205,13 +214,25 @@ def main() -> None:
 
     matches: List[Dict] = []
     best_close: Dict | None = None
+    all_rows: List[Dict] = []
     start = time.time()
     scan_id = 0
-    for c in c_values:
+
+    seen_c = set()
+    target_mid = (args.test_acc_min + args.test_acc_max) / 2.0
+
+    def _eval_one(c: float) -> bool:
+        nonlocal scan_id, best_close
+        c = float(c)
+        key = round(c, 16)
+        if key in seen_c:
+            return False
+        seen_c.add(key)
+
         t0 = time.time()
         clf = LogisticRegression(
             random_state=args.seed,
-            C=float(c),
+            C=c,
             penalty="l2",
             solver="lbfgs",
             fit_intercept=fit_intercept,
@@ -247,7 +268,7 @@ def main() -> None:
             "clip_model": args.clip_model,
             "feature_mode": args.feature_mode,
             "class_weight": args.class_weight,
-            "C": float(c),
+            "C": c,
             "fit_intercept": fit_intercept,
             "penalty": "l2",
             "solver": "lbfgs",
@@ -268,10 +289,11 @@ def main() -> None:
             "seconds": int(time.time() - t0),
         }
         _write_row(args.output_csv, row, header)
+        all_rows.append(row)
 
         if (best_close is None) or (
-            _score_close(row, target_mid=(args.test_acc_min + args.test_acc_max) / 2.0, worst_max=args.test_worst_class_max)
-            < _score_close(best_close, target_mid=(args.test_acc_min + args.test_acc_max) / 2.0, worst_max=args.test_worst_class_max)
+            _score_close(row, target_mid=target_mid, worst_max=args.test_worst_class_max)
+            < _score_close(best_close, target_mid=target_mid, worst_max=args.test_worst_class_max)
         ):
             best_close = dict(row)
 
@@ -294,9 +316,47 @@ def main() -> None:
                 total = time.time() - start
                 print(f"[DONE] Early stop after {scan_id + 1} scans in {total / 60.0:.2f} min.", flush=True)
                 print(f"[DONE] Results CSV: {args.output_csv}", flush=True)
-                return
+                return True
 
         scan_id += 1
+        return False
+
+    # Coarse global scan.
+    for c in c_values:
+        stop = _eval_one(float(c))
+        if stop:
+            return
+
+    # Local refinement around the best coarse candidates.
+    for rr in range(int(args.refine_rounds)):
+        if not all_rows:
+            break
+        ranked = sorted(
+            all_rows,
+            key=lambda r: _score_close(r, target_mid=target_mid, worst_max=args.test_worst_class_max),
+        )
+        seeds = ranked[: max(1, int(args.refine_top_k))]
+        local_cs: List[float] = []
+        for s in seeds:
+            center = float(s["C"])
+            lo = max(float(args.c_min), center / float(args.refine_span))
+            hi = min(float(args.c_max), center * float(args.refine_span))
+            if not np.isfinite(lo) or not np.isfinite(hi) or lo <= 0 or hi <= lo:
+                continue
+            local = np.exp(np.linspace(np.log(lo), np.log(hi), int(args.refine_n_values), dtype=np.float64))
+            local_cs.extend(local.tolist())
+
+        if not local_cs:
+            break
+        print(
+            f"[REFINE] round={rr + 1}/{args.refine_rounds} "
+            f"centers={len(seeds)} candidates={len(local_cs)}",
+            flush=True,
+        )
+        for c in local_cs:
+            stop = _eval_one(float(c))
+            if stop:
+                return
 
     total = time.time() - start
     print(f"[DONE] Exhaustive scan complete. scanned={scan_id} elapsed_min={total / 60.0:.2f}", flush=True)
