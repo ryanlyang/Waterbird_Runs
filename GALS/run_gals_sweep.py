@@ -154,6 +154,16 @@ def print_runtime_summary(tag, rows, num_epochs=None):
         )
 
 
+def metric_value(row, objective):
+    v = row.get(objective)
+    if v is None:
+        return -1.0
+    try:
+        return float(v)
+    except Exception:
+        return -1.0
+
+
 def _parse_metric_line(line):
     # Matches lines like: "balanced_val_acc: 0.8123" or "test_acc: 0.901"
     parts = line.strip().split(":")
@@ -359,6 +369,21 @@ def main():
         type=float,
         default=None,
         help="Optional wallclock limit; stops launching new trials once exceeded",
+    )
+    parser.add_argument(
+        "--objective",
+        choices=["best_balanced_val_acc", "per_group", "worst_group", "balanced_test_acc", "test_acc"],
+        default="best_balanced_val_acc",
+        help="Metric used to select best trial and drive Optuna optimization.",
+    )
+    parser.add_argument(
+        "--stop-threshold",
+        type=float,
+        default=None,
+        help=(
+            "Optional early-stop threshold on --objective. "
+            "When objective >= threshold, stop launching new trials."
+        ),
     )
 
     parser.add_argument("--weight-min", type=float, default=None, help="Min for GRADIENT_OUTSIDE weight (gals/rrr)")
@@ -634,6 +659,7 @@ def main():
     best_row = None
     best_dir = None
     sweep_rows = []
+    threshold_hit = False
 
     def cleanup_run_dir(path):
         if not path:
@@ -653,7 +679,7 @@ def main():
         weight_decay,
         sampler_name,
     ):
-        nonlocal best_row, best_dir
+        nonlocal best_row, best_dir, threshold_hit
         run_name = f"{run_name_prefix}_trial_{trial_id:03d}"
         row = run_one_trial(
             trial_id,
@@ -680,8 +706,9 @@ def main():
         write_row(args.output_csv, row, header)
         sweep_rows.append(row)
 
-        score = row["best_balanced_val_acc"]
-        is_new_best = score is not None and (best_row is None or score > best_row["best_balanced_val_acc"])
+        score = metric_value(row, args.objective)
+        best_score = metric_value(best_row, args.objective) if best_row is not None else None
+        is_new_best = best_row is None or score > best_score
         run_dir = row.get("run_dir")
 
         if args.keep == "none":
@@ -695,6 +722,10 @@ def main():
 
         if is_new_best:
             best_row = row
+
+        if args.stop_threshold is not None and score >= float(args.stop_threshold):
+            threshold_hit = True
+
         return row
 
     start_time = time.time()
@@ -703,6 +734,13 @@ def main():
         for trial_id in range(args.n_trials):
             if args.max_hours is not None and (time.time() - start_time) >= args.max_hours * 3600:
                 print(f"[SWEEP] Reached max-hours={args.max_hours}; stopping before trial {trial_id}.", flush=True)
+                break
+            if threshold_hit:
+                print(
+                    f"[SWEEP] Reached objective threshold ({args.objective}>={args.stop_threshold}); "
+                    f"stopping before trial {trial_id}.",
+                    flush=True,
+                )
                 break
             base_lr = loguniform(rng, args.base_lr_min, args.base_lr_max)
             classifier_lr = loguniform(rng, args.cls_lr_min, args.cls_lr_max)
@@ -738,10 +776,23 @@ def main():
                     weight_decay,
                     "random",
                 )
+                score = metric_value(row, args.objective)
                 print(
-                    f"[SWEEP] Trial {trial_id} done. best_balanced_val_acc={row['best_balanced_val_acc']}",
+                    f"[SWEEP] Trial {trial_id} done. "
+                    f"{args.objective}={score:.4f} "
+                    f"per_group={row.get('per_group')} worst_group={row.get('worst_group')} "
+                    f"test_acc={row.get('test_acc')} "
+                    f"base_lr={row.get('base_lr')} cls_lr={row.get('classifier_lr')} "
+                    f"grad_weight={row.get('grad_weight')} grad_criterion={row.get('grad_criterion')}",
                     flush=True,
                 )
+                if threshold_hit:
+                    print(
+                        f"[SWEEP] Reached objective threshold ({args.objective}>={args.stop_threshold}); "
+                        "stopping random sweep.",
+                        flush=True,
+                    )
+                    break
             except Exception as exc:
                 print(f"[SWEEP] Trial {trial_id} failed: {exc}", flush=True)
     else:
@@ -786,8 +837,24 @@ def main():
                 weight_decay,
                 "tpe",
             )
-            print(f"[SWEEP] Trial {trial.number} done. best_balanced_val_acc={row['best_balanced_val_acc']}", flush=True)
-            return row["best_balanced_val_acc"] if row["best_balanced_val_acc"] is not None else -1.0
+            score = metric_value(row, args.objective)
+            print(
+                f"[SWEEP] Trial {trial.number} done. "
+                f"{args.objective}={score:.4f} "
+                f"per_group={row.get('per_group')} worst_group={row.get('worst_group')} "
+                f"test_acc={row.get('test_acc')} "
+                f"base_lr={row.get('base_lr')} cls_lr={row.get('classifier_lr')} "
+                f"grad_weight={row.get('grad_weight')} grad_criterion={row.get('grad_criterion')}",
+                flush=True,
+            )
+            if threshold_hit:
+                print(
+                    f"[SWEEP] Reached objective threshold ({args.objective}>={args.stop_threshold}); "
+                    "stopping study.",
+                    flush=True,
+                )
+                trial.study.stop()
+            return score
 
         callbacks = []
         if args.max_hours is not None:
@@ -807,6 +874,7 @@ def main():
 
     if best_row is not None:
         print("[SWEEP] Best trial:", flush=True)
+        print(f"  objective: {args.objective}={metric_value(best_row, args.objective)}", flush=True)
         for k in header:
             if k in best_row:
                 print(f"  {k}: {best_row[k]}", flush=True)
