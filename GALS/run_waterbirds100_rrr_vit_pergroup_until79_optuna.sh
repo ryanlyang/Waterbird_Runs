@@ -3,7 +3,7 @@
 # Stops early once per_group >= 79 by default.
 
 #SBATCH --account=reu-aisocial
-#SBATCH --partition=tier3
+#SBATCH --partition=debug
 #SBATCH --gres=gpu:a100:1
 #SBATCH --time=3-00:00:00
 #SBATCH --ntasks=1
