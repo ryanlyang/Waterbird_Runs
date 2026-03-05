@@ -53,7 +53,7 @@ BATCH_SIZE=${BATCH_SIZE:-256}
 NUM_WORKERS=${NUM_WORKERS:-0}
 SEED=${SEED:-0}
 FEATURE_MODE=${FEATURE_MODE:-l2}
-FIT_INTERCEPT_MODE=${FIT_INTERCEPT_MODE:-both}
+FIT_INTERCEPT=${FIT_INTERCEPT:-1}
 CLASS_WEIGHT=${CLASS_WEIGHT:-none}
 TOL=${TOL:-1e-4}
 MAX_ITER=${MAX_ITER:-5000}
@@ -98,7 +98,7 @@ echo "[$(date)] Host: $(hostname)"
 echo "Repo: $REPO_ROOT"
 echo "Data: $DATASET_ROOT"
 echo "CLIP model: $CLIP_MODEL"
-echo "C scan: min=$C_MIN max=$C_MAX n=$N_C_VALUES fit_intercept_mode=$FIT_INTERCEPT_MODE"
+echo "C scan: min=$C_MIN max=$C_MAX n=$N_C_VALUES fit_intercept=$FIT_INTERCEPT"
 echo "Targets: val_acc > $VAL_ACC_MIN, test_acc in [$TEST_ACC_MIN,$TEST_ACC_MAX), test_worst_class <= $TEST_WORST_CLASS_MAX"
 echo "Output CSV: $OUT_CSV"
 which python
@@ -120,7 +120,7 @@ CMD=(
   --c-min "$C_MIN"
   --c-max "$C_MAX"
   --n-c-values "$N_C_VALUES"
-  --fit-intercept-mode "$FIT_INTERCEPT_MODE"
+  --fit-intercept "$FIT_INTERCEPT"
   --feature-mode "$FEATURE_MODE"
   --class-weight "$CLASS_WEIGHT"
   --tol "$TOL"

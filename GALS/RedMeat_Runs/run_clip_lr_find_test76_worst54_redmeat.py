@@ -45,17 +45,6 @@ def _parse_c_values(args) -> np.ndarray:
     return out[np.sort(idx)]
 
 
-def _fit_intercept_values(mode: str) -> List[bool]:
-    mode = mode.lower().strip()
-    if mode == "true":
-        return [True]
-    if mode == "false":
-        return [False]
-    if mode == "both":
-        return [True, False]
-    raise ValueError(f"Unsupported --fit-intercept-mode: {mode}")
-
-
 def _score_close(row: Dict, target_mid: float, worst_max: float) -> tuple:
     test_acc = float(row["test_acc"])
     worst = float(row["test_worst_class_acc"])
@@ -89,7 +78,7 @@ def main() -> None:
     p.add_argument("--n-c-values", type=int, default=400)
     p.add_argument("--c-values", default="", help="Optional explicit comma-separated C values.")
 
-    p.add_argument("--fit-intercept-mode", choices=["true", "false", "both"], default="both")
+    p.add_argument("--fit-intercept", type=int, default=1, choices=[0, 1])
     p.add_argument("--feature-mode", choices=["l2", "raw", "zscore"], default="l2")
     p.add_argument("--class-weight", choices=["none", "balanced"], default="none")
     p.add_argument("--tol", type=float, default=1e-4)
@@ -173,7 +162,7 @@ def main() -> None:
         X_test = clip_lr._ensure_finite_contiguous(scaler.transform(X_test_raw))
 
     c_values = _parse_c_values(args)
-    fit_intercepts = _fit_intercept_values(args.fit_intercept_mode)
+    fit_intercept = bool(args.fit_intercept)
     class_weight = None if args.class_weight == "none" else "balanced"
 
     header = [
@@ -203,7 +192,7 @@ def main() -> None:
     ]
 
     print(
-        f"[SCAN] Starting C scan: n_c_values={len(c_values)} fit_intercept={fit_intercepts} "
+        f"[SCAN] Starting C scan: n_c_values={len(c_values)} fit_intercept={fit_intercept} "
         f"feature_mode={args.feature_mode} class_weight={args.class_weight} tol={args.tol}",
         flush=True,
     )
@@ -219,96 +208,95 @@ def main() -> None:
     start = time.time()
     scan_id = 0
     for c in c_values:
-        for fit_intercept in fit_intercepts:
-            t0 = time.time()
-            clf = LogisticRegression(
-                random_state=args.seed,
-                C=float(c),
-                penalty="l2",
-                solver="lbfgs",
-                fit_intercept=bool(fit_intercept),
-                max_iter=args.max_iter,
-                tol=float(args.tol),
-                class_weight=class_weight,
-                n_jobs=1,
-                verbose=0,
+        t0 = time.time()
+        clf = LogisticRegression(
+            random_state=args.seed,
+            C=float(c),
+            penalty="l2",
+            solver="lbfgs",
+            fit_intercept=fit_intercept,
+            max_iter=args.max_iter,
+            tol=float(args.tol),
+            class_weight=class_weight,
+            n_jobs=1,
+            verbose=0,
+        )
+        clip_lr._safe_fit(clf, X_train, y_train)
+
+        val_pred = clf.predict(X_val)
+        val_acc = float(np.mean((val_pred == y_val).astype(np.float64)) * 100.0)
+        val_class = clip_lr._class_acc(y_val, val_pred, num_classes=num_classes)
+        val_avg_group = clip_lr._nanmean(val_class)
+        val_worst_group = clip_lr._nanmin(val_class)
+
+        test_pred = clf.predict(X_test)
+        test_acc = float(np.mean((test_pred == y_test).astype(np.float64)) * 100.0)
+        test_class = clip_lr._class_acc(y_test, test_pred, num_classes=num_classes)
+        test_avg_group = clip_lr._nanmean(test_class)
+        test_worst = clip_lr._nanmin(test_class)
+
+        matched = (
+            (val_acc > float(args.val_acc_min))
+            and
+            (test_acc >= float(args.test_acc_min))
+            and (test_acc < float(args.test_acc_max))
+            and (test_worst <= float(args.test_worst_class_max))
+        )
+        row = {
+            "scan_id": scan_id,
+            "clip_model": args.clip_model,
+            "feature_mode": args.feature_mode,
+            "class_weight": args.class_weight,
+            "C": float(c),
+            "fit_intercept": fit_intercept,
+            "penalty": "l2",
+            "solver": "lbfgs",
+            "tol": float(args.tol),
+            "val_acc": val_acc,
+            "val_avg_group_acc": val_avg_group,
+            "val_worst_group_acc": val_worst_group,
+            "val_group_accs": np.array2string(val_class, precision=2, separator=","),
+            "test_acc": test_acc,
+            "test_avg_group_acc": test_avg_group,
+            "test_worst_class_acc": test_worst,
+            "test_group_accs": np.array2string(test_class, precision=2, separator=","),
+            "target_test_acc_min": float(args.test_acc_min),
+            "target_test_acc_max": float(args.test_acc_max),
+            "target_test_worst_class_max": float(args.test_worst_class_max),
+            "target_val_acc_min": float(args.val_acc_min),
+            "matched": int(bool(matched)),
+            "seconds": int(time.time() - t0),
+        }
+        _write_row(args.output_csv, row, header)
+
+        if (best_close is None) or (
+            _score_close(row, target_mid=(args.test_acc_min + args.test_acc_max) / 2.0, worst_max=args.test_worst_class_max)
+            < _score_close(best_close, target_mid=(args.test_acc_min + args.test_acc_max) / 2.0, worst_max=args.test_worst_class_max)
+        ):
+            best_close = dict(row)
+
+        if scan_id % 20 == 0 or matched:
+            print(
+                f"[SCAN] id={scan_id} C={c:.6g} fit_intercept={fit_intercept} "
+                f"val_acc={val_acc:.2f} test_acc={test_acc:.2f} test_worst={test_worst:.2f} "
+                f"matched={matched}",
+                flush=True,
             )
-            clip_lr._safe_fit(clf, X_train, y_train)
 
-            val_pred = clf.predict(X_val)
-            val_acc = float(np.mean((val_pred == y_val).astype(np.float64)) * 100.0)
-            val_class = clip_lr._class_acc(y_val, val_pred, num_classes=num_classes)
-            val_avg_group = clip_lr._nanmean(val_class)
-            val_worst_group = clip_lr._nanmin(val_class)
-
-            test_pred = clf.predict(X_test)
-            test_acc = float(np.mean((test_pred == y_test).astype(np.float64)) * 100.0)
-            test_class = clip_lr._class_acc(y_test, test_pred, num_classes=num_classes)
-            test_avg_group = clip_lr._nanmean(test_class)
-            test_worst = clip_lr._nanmin(test_class)
-
-            matched = (
-                (val_acc > float(args.val_acc_min))
-                and
-                (test_acc >= float(args.test_acc_min))
-                and (test_acc < float(args.test_acc_max))
-                and (test_worst <= float(args.test_worst_class_max))
+        if matched:
+            matches.append(row)
+            print(
+                f"[FOUND] id={scan_id} C={c:.10g} fit_intercept={fit_intercept} "
+                f"test_acc={test_acc:.2f} test_worst={test_worst:.2f}",
+                flush=True,
             )
-            row = {
-                "scan_id": scan_id,
-                "clip_model": args.clip_model,
-                "feature_mode": args.feature_mode,
-                "class_weight": args.class_weight,
-                "C": float(c),
-                "fit_intercept": bool(fit_intercept),
-                "penalty": "l2",
-                "solver": "lbfgs",
-                "tol": float(args.tol),
-                "val_acc": val_acc,
-                "val_avg_group_acc": val_avg_group,
-                "val_worst_group_acc": val_worst_group,
-                "val_group_accs": np.array2string(val_class, precision=2, separator=","),
-                "test_acc": test_acc,
-                "test_avg_group_acc": test_avg_group,
-                "test_worst_class_acc": test_worst,
-                "test_group_accs": np.array2string(test_class, precision=2, separator=","),
-                "target_test_acc_min": float(args.test_acc_min),
-                "target_test_acc_max": float(args.test_acc_max),
-                "target_test_worst_class_max": float(args.test_worst_class_max),
-                "target_val_acc_min": float(args.val_acc_min),
-                "matched": int(bool(matched)),
-                "seconds": int(time.time() - t0),
-            }
-            _write_row(args.output_csv, row, header)
+            if args.stop_on_match and len(matches) >= int(args.max_matches):
+                total = time.time() - start
+                print(f"[DONE] Early stop after {scan_id + 1} scans in {total / 60.0:.2f} min.", flush=True)
+                print(f"[DONE] Results CSV: {args.output_csv}", flush=True)
+                return
 
-            if (best_close is None) or (
-                _score_close(row, target_mid=(args.test_acc_min + args.test_acc_max) / 2.0, worst_max=args.test_worst_class_max)
-                < _score_close(best_close, target_mid=(args.test_acc_min + args.test_acc_max) / 2.0, worst_max=args.test_worst_class_max)
-            ):
-                best_close = dict(row)
-
-            if scan_id % 20 == 0 or matched:
-                print(
-                    f"[SCAN] id={scan_id} C={c:.6g} fit_intercept={fit_intercept} "
-                    f"val_acc={val_acc:.2f} test_acc={test_acc:.2f} test_worst={test_worst:.2f} "
-                    f"matched={matched}",
-                    flush=True,
-                )
-
-            if matched:
-                matches.append(row)
-                print(
-                    f"[FOUND] id={scan_id} C={c:.10g} fit_intercept={fit_intercept} "
-                    f"test_acc={test_acc:.2f} test_worst={test_worst:.2f}",
-                    flush=True,
-                )
-                if args.stop_on_match and len(matches) >= int(args.max_matches):
-                    total = time.time() - start
-                    print(f"[DONE] Early stop after {scan_id + 1} scans in {total / 60.0:.2f} min.", flush=True)
-                    print(f"[DONE] Results CSV: {args.output_csv}", flush=True)
-                    return
-
-            scan_id += 1
+        scan_id += 1
 
     total = time.time() - start
     print(f"[DONE] Exhaustive scan complete. scanned={scan_id} elapsed_min={total / 60.0:.2f}", flush=True)
