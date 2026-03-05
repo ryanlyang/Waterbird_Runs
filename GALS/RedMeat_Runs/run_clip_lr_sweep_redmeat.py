@@ -321,6 +321,13 @@ def _sample_penalty_solver_random(rng: np.random.Generator, choices) -> Tuple[st
     return penalty, solver, l1_ratio
 
 
+def _suggest_float_or_const(trial, name: str, low: float, high: float, *, log: bool = False) -> float:
+    # Allow fixed-value "sweeps" where low == high.
+    if float(low) == float(high):
+        return float(low)
+    return float(trial.suggest_float(name, low, high, log=log))
+
+
 def _run_trial(
     trial_id: int,
     sampler: str,
@@ -347,7 +354,7 @@ def _run_trial(
         tol = float(np.exp(rng.uniform(np.log(args.tol_min), np.log(args.tol_max))))
     else:
         trial = args.trial
-        C = float(trial.suggest_float("C", args.C_min, args.C_max, log=True))
+        C = _suggest_float_or_const(trial, "C", args.C_min, args.C_max, log=True)
         fit_intercept = bool(trial.suggest_categorical("fit_intercept", [True, False]))
         choice_id = str(trial.suggest_categorical("penalty_solver", args.penalty_solver_ids))
         penalty, solver, l1_spec = args.penalty_solver_by_id[choice_id]
@@ -358,7 +365,7 @@ def _run_trial(
         feature_mode = str(trial.suggest_categorical("feature_mode", args.feature_modes))
         class_weight_name = str(trial.suggest_categorical("class_weight", args.class_weight_option_names))
         class_weight = None if class_weight_name == "none" else "balanced"
-        tol = float(trial.suggest_float("tol", args.tol_min, args.tol_max, log=True))
+        tol = _suggest_float_or_const(trial, "tol", args.tol_min, args.tol_max, log=True)
 
     X_train = X_train_by_mode[feature_mode]
     X_val = X_val_by_mode[feature_mode]
