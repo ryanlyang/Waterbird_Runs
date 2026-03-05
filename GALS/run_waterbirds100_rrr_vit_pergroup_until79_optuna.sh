@@ -7,7 +7,7 @@
 #SBATCH --gres=gpu:a100:1
 #SBATCH --time=3-00:00:00
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=32
+#SBATCH --cpus-per-task=16
 #SBATCH --mem=32G
 #SBATCH --output=/home/ryreu/guided_cnn/logsWaterbird/wb100_rrr_vit_pergroup_until79_%j.out
 #SBATCH --error=/home/ryreu/guided_cnn/logsWaterbird/wb100_rrr_vit_pergroup_until79_%j.err
