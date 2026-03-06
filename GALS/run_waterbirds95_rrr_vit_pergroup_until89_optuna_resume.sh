@@ -2,12 +2,12 @@
 # Resume-like continuation for WB95 RRR ViT per_group sweep from prior CSV trials.
 
 #SBATCH --account=reu-aisocial
-#SBATCH --partition=tier3
+#SBATCH --partition=debug
 #SBATCH --gres=gpu:a100:1
-#SBATCH --time=7-00:00:00
+#SBATCH --time=1-00:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=64G
+#SBATCH --mem=32G
 #SBATCH --output=/home/ryreu/guided_cnn/logsWaterbird/wb95_rrr_vit_pergroup_until89_resume_%j.out
 #SBATCH --error=/home/ryreu/guided_cnn/logsWaterbird/wb95_rrr_vit_pergroup_until89_resume_%j.err
 #SBATCH --signal=TERM@120
