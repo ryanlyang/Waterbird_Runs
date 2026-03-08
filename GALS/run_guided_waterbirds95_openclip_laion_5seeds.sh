@@ -2,7 +2,7 @@
 # Guided Waterbirds95 fixed-hparam rerun (seeds 0-4) with OpenCLIP-LAION GT masks.
 
 #SBATCH --account=reu-aisocial
-#SBATCH --partition=tier3
+#SBATCH --partition=onboard
 #SBATCH --gres=gpu:a100:1
 #SBATCH --time=2:30:00
 #SBATCH --ntasks=1
