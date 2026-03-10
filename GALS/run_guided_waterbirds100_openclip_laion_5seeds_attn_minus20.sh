@@ -2,7 +2,7 @@
 # WB100 local sensitivity: attention_epoch-20 (from 73 -> 53), others fixed.
 
 #SBATCH --account=reu-aisocial
-#SBATCH --partition=tier3
+#SBATCH --partition=debug
 #SBATCH --gres=gpu:a100:1
 #SBATCH --time=2:30:00
 #SBATCH --ntasks=1
