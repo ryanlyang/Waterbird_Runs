@@ -7,7 +7,7 @@
 #   sbatch --export=ALL,WB_PROFILE=95,ABLATION_MODE=invert,ABLATION_FRAC=0.30 run_guided_waterbirds_mask_ablation_5seeds.sh
 
 #SBATCH --account=reu-aisocial
-#SBATCH --partition=tier3
+#SBATCH --partition=debug
 #SBATCH --gres=gpu:a100:1
 #SBATCH --time=13:00:00
 #SBATCH --ntasks=1
