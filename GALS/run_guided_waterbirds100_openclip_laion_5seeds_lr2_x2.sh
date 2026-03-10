@@ -1,5 +1,5 @@
 #!/bin/bash -l
-# WB100 local sensitivity: lr2_mult*2 (from 0.123 -> 0.246), others fixed.
+# WB100 local sensitivity: lr2_mult*1.25 (from 0.123 -> 0.15375), others fixed.
 
 #SBATCH --account=reu-aisocial
 #SBATCH --partition=debug
@@ -14,8 +14,8 @@
 
 set -Eeuo pipefail
 
-export LR2_MULT=0.246
-export SUMMARY_CSV="${SUMMARY_CSV:-/home/ryreu/guided_cnn/logsWaterbird/guided100_sens_lr2x2_${SLURM_JOB_ID}.csv}"
+export LR2_MULT=0.15375
+export SUMMARY_CSV="${SUMMARY_CSV:-/home/ryreu/guided_cnn/logsWaterbird/guided100_sens_lr2125_${SLURM_JOB_ID}.csv}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SUBMIT_DIR="${SLURM_SUBMIT_DIR:-${SBATCH_SUBMIT_DIR:-${PWD:-}}}"

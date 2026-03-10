@@ -1,5 +1,5 @@
 #!/bin/bash -l
-# WB100 local sensitivity: attention_epoch+20 (from 73 -> 93), others fixed.
+# WB100 local sensitivity: attention_epoch+10 (from 73 -> 83), others fixed.
 
 #SBATCH --account=reu-aisocial
 #SBATCH --partition=debug
@@ -14,8 +14,8 @@
 
 set -Eeuo pipefail
 
-export ATTENTION_EPOCH=93
-export SUMMARY_CSV="${SUMMARY_CSV:-/home/ryreu/guided_cnn/logsWaterbird/guided100_sens_attnplus20_${SLURM_JOB_ID}.csv}"
+export ATTENTION_EPOCH=83
+export SUMMARY_CSV="${SUMMARY_CSV:-/home/ryreu/guided_cnn/logsWaterbird/guided100_sens_attnplus10_${SLURM_JOB_ID}.csv}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SUBMIT_DIR="${SLURM_SUBMIT_DIR:-${SBATCH_SUBMIT_DIR:-${PWD:-}}}"
