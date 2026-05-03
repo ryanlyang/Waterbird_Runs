@@ -717,13 +717,31 @@ def main() -> None:
     print(f"\n[DONE] wrote {args.output_csv}")
 
     print("\n[SUMMARY] by dataset + variant")
-    by_key: Dict[Tuple[str, str], List[float]] = {}
+    by_key_acc: Dict[Tuple[str, str], List[float]] = {}
+    by_key_worst_class: Dict[Tuple[str, str], List[float]] = {}
+    by_key_worst_group: Dict[Tuple[str, str], List[float]] = {}
     for r in rows:
         key = (str(r["dataset"]), str(r["variant"]))
-        by_key.setdefault(key, []).append(float(r["acc"]))
-    for key in sorted(by_key):
-        vals = np.array(by_key[key], dtype=float)
-        print(f"  {key[0]} | {key[1]} acc={np.mean(vals):.4f} +/- {np.std(vals):.4f}")
+        by_key_acc.setdefault(key, []).append(float(r["acc"]))
+
+        worst_class_raw = r.get("worst_class_acc", "")
+        if worst_class_raw not in ("", None):
+            by_key_worst_class.setdefault(key, []).append(float(worst_class_raw))
+
+        worst_group_raw = r.get("worst_group_acc", "")
+        if worst_group_raw not in ("", None):
+            by_key_worst_group.setdefault(key, []).append(float(worst_group_raw))
+
+    for key in sorted(by_key_acc):
+        acc_vals = np.array(by_key_acc[key], dtype=float)
+        msg = f"  {key[0]} | {key[1]} acc={np.mean(acc_vals):.4f} +/- {np.std(acc_vals):.4f}"
+        if key in by_key_worst_class and len(by_key_worst_class[key]) > 0:
+            wc = np.array(by_key_worst_class[key], dtype=float)
+            msg += f" | worst_class={np.mean(wc):.4f} +/- {np.std(wc):.4f}"
+        if key in by_key_worst_group and len(by_key_worst_group[key]) > 0:
+            wg = np.array(by_key_worst_group[key], dtype=float)
+            msg += f" | worst_group={np.mean(wg):.4f} +/- {np.std(wg):.4f}"
+        print(msg)
     print(f"[TIME] seconds={int(time.time() - t0)}")
 
 
