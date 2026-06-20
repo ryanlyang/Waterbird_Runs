@@ -192,6 +192,9 @@ def evaluate(model: nn.Module, loader: DataLoader, device: torch.device, num_cla
 
 
 def build_dataloaders(args, generator: torch.Generator):
+    data_path = getattr(args, "data_path", None) or getattr(args, "data_root", None)
+    if not data_path:
+        raise AttributeError("Expected args.data_path or args.data_root for RedMeat dataset root")
     image_transform = transforms.Compose(
         [
             transforms.Resize((224, 224)),
@@ -199,11 +202,11 @@ def build_dataloaders(args, generator: torch.Generator):
             transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
         ]
     )
-    metadata_path = os.path.join(args.data_path, "all_images.csv")
+    metadata_path = os.path.join(data_path, "all_images.csv")
     classes = _parse_classes(args.classes, metadata_path)
-    train_dataset = RedMeatNSFDataset(args.data_path, "train", image_transform, classes=classes)
-    val_dataset = RedMeatNSFDataset(args.data_path, "val", image_transform, classes=train_dataset.classes)
-    test_dataset = RedMeatNSFDataset(args.data_path, "test", image_transform, classes=train_dataset.classes)
+    train_dataset = RedMeatNSFDataset(data_path, "train", image_transform, classes=classes)
+    val_dataset = RedMeatNSFDataset(data_path, "val", image_transform, classes=train_dataset.classes)
+    test_dataset = RedMeatNSFDataset(data_path, "test", image_transform, classes=train_dataset.classes)
 
     train_loader = DataLoader(
         train_dataset,

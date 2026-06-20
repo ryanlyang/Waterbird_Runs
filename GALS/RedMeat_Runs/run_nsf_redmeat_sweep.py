@@ -79,6 +79,7 @@ def _build_run_args(
     transform_lr: float,
 ) -> argparse.Namespace:
     return argparse.Namespace(
+        data_path=args.data_root,
         data_root=args.data_root,
         classes=args.classes,
         split_col=args.split_col,
