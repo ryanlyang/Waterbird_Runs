@@ -173,6 +173,10 @@ def make_cam_model(num_classes, model_name="resnet50", pretrained=True):
         return CAMWrap(base)
     if model_name == "resnet50":
         return ResNetCAM(num_classes, pretrained=pretrained)
+    if model_name == "mobilenet_v3_large":
+        from GALS.models.cam_backbones import MobileNetV3CAM
+
+        return MobileNetV3CAM(num_classes=num_classes, pretrained=pretrained)
     raise ValueError(f"Unsupported model_name: {model_name}")
 
 
@@ -574,13 +578,19 @@ def run_single(args, attn_epoch, kl_value, kl_increment=None):
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False,
                              num_workers=num_workers, worker_init_fn=seed_worker, generator=g)
 
-    model = make_cam_model(num_classes, model_name="resnet50", pretrained=True).to(device)
+    model_name = str(getattr(args, "model_name", "resnet50"))
+    pretrained = bool(getattr(args, "pretrained", True))
+    model = make_cam_model(num_classes, model_name=model_name, pretrained=pretrained).to(device)
 
     save_checkpoints = os.environ.get("SAVE_CHECKPOINTS", "1").lower() not in ("0", "false", "no", "n")
     if save_checkpoints:
         os.makedirs(checkpoint_dir, exist_ok=True)
 
-    print(f"\n=== RUN: kl_lambda={kl_value}, attention_epoch={attn_epoch} ===", flush=True)
+    print(
+        f"\n=== RUN: model_name={model_name} pretrained={pretrained} "
+        f"kl_lambda={kl_value}, attention_epoch={attn_epoch} ===",
+        flush=True,
+    )
     if kl_increment is None:
         kl_increment = kl_value / 10
     best_model, best_score, best_epoch = train_model(
@@ -603,7 +613,7 @@ def run_single(args, attn_epoch, kl_value, kl_increment=None):
     # Save best model (named with hyperparams) unless disabled.
     if save_checkpoints:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        save_name = f"resnet50_final_kl{int(kl_value)}_attn{attn_epoch}_{ts}.pth"
+        save_name = f"{model_name}_final_kl{int(kl_value)}_attn{attn_epoch}_{ts}.pth"
         save_path = os.path.join(checkpoint_dir, save_name)
         torch.save(best_model.state_dict(), save_path)
     else:
@@ -630,6 +640,10 @@ def main():
     parser.add_argument('--classifier_lr', type=float, default=classifier_lr, help='Classifier learning rate')
     parser.add_argument('--lr2_mult', type=float, default=lr2_mult,
                         help='Multiplier applied to both base_lr and classifier_lr after attention_epoch restart')
+    parser.add_argument('--model-name', choices=['resnet50', 'mobilenet_v3_large'], default='resnet50',
+                        help='Student CNN backbone')
+    parser.add_argument('--pretrained', action='store_true', default=True)
+    parser.add_argument('--no-pretrained', action='store_false', dest='pretrained')
     parser.add_argument('--sweep', action='store_true',
                         help='Run the full hyperparameter sweep (kl 100..300 step 20; attn 5..25 step 2)')
     args = parser.parse_args()

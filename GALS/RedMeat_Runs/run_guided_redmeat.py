@@ -117,6 +117,8 @@ def make_redmeat_cam_model(
         return base.make_cam_model(num_classes, model_name="resnet50", pretrained=pretrained)
     if model_name == "clip_rn50":
         return CLIPRN50CAM(num_classes=num_classes, clip_model_name=clip_model, pretrained=pretrained)
+    if model_name == "mobilenet_v3_large":
+        return base.make_cam_model(num_classes, model_name="mobilenet_v3_large", pretrained=pretrained)
     raise ValueError(f"Unsupported model_name: {model_name}")
 
 
@@ -124,7 +126,8 @@ def configure_tune_mode(model: nn.Module, tune_mode: str) -> None:
     """
     Configure trainable parameters for CLIP-guided variants.
     - full: train everything
-    - layer4_head: train only layer4 + classifier
+    - layer4_head: train only layer4/last MobileNet feature blocks + classifier
+    - last_blocks_head: train final feature blocks + classifier
     - linear_probe: train classifier only (CLIP visual frozen)
     """
     mode = str(tune_mode).strip().lower()
@@ -136,20 +139,37 @@ def configure_tune_mode(model: nn.Module, tune_mode: str) -> None:
     for p in model.parameters():
         p.requires_grad = False
 
-    if not hasattr(model, "classifier"):
+    head = None
+    if hasattr(model, "base") and hasattr(model.base, "classifier"):
+        head = model.base.classifier
+    elif hasattr(model, "classifier"):
+        head = model.classifier
+    if head is None:
         raise AttributeError(f"Model does not expose `.classifier`; cannot apply tune_mode={mode}")
-    for p in model.classifier.parameters():
+    for p in head.parameters():
         p.requires_grad = True
 
     if mode == "linear_probe":
         return
 
-    if mode == "layer4_head":
-        if not hasattr(model, "layer4"):
-            raise AttributeError(f"Model does not expose `.layer4`; cannot apply tune_mode={mode}")
-        for p in model.layer4.parameters():
-            p.requires_grad = True
-        return
+    if mode in {"layer4_head", "last_blocks_head"}:
+        if hasattr(model, "layer4"):
+            for p in model.layer4.parameters():
+                p.requires_grad = True
+            return
+        if hasattr(model, "base") and hasattr(model.base, "features") and isinstance(model.base.features, nn.Sequential):
+            for block in model.base.features[-3:]:
+                for p in block.parameters():
+                    p.requires_grad = True
+            return
+        if hasattr(model, "features") and isinstance(model.features, nn.Sequential):
+            for block in model.features[-3:]:
+                for p in block.parameters():
+                    p.requires_grad = True
+            return
+        raise AttributeError(
+            f"Model does not expose `.layer4` or MobileNet-style feature blocks; cannot apply tune_mode={mode}"
+        )
 
     raise ValueError(f"Unsupported tune_mode: {tune_mode}")
 
@@ -413,13 +433,14 @@ def run_single(args, attn_epoch, kl_value, kl_increment=None):
     )
 
     num_classes = len(train_dataset.classes)
+    num_workers = base.get_num_workers(default=4)
 
     dataloaders = {
         "train": DataLoader(
             train_dataset,
             batch_size=batch_size,
             shuffle=True,
-            num_workers=4,
+            num_workers=num_workers,
             worker_init_fn=base.seed_worker,
             generator=g,
         ),
@@ -427,7 +448,7 @@ def run_single(args, attn_epoch, kl_value, kl_increment=None):
             val_dataset,
             batch_size=batch_size,
             shuffle=False,
-            num_workers=4,
+            num_workers=num_workers,
             worker_init_fn=base.seed_worker,
             generator=g,
         ),
@@ -441,7 +462,7 @@ def run_single(args, attn_epoch, kl_value, kl_increment=None):
         test_dataset,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=4,
+        num_workers=num_workers,
         worker_init_fn=base.seed_worker,
         generator=g,
     )
@@ -510,7 +531,7 @@ def run_single(args, attn_epoch, kl_value, kl_increment=None):
 def main():
     global SEED, base_lr, classifier_lr, lr2_mult, num_epochs, checkpoint_dir
 
-    p = argparse.ArgumentParser(description="Guided RedMeat runner (ResNet50 + KL guidance to GT masks).")
+    p = argparse.ArgumentParser(description="Guided RedMeat runner (CNN + KL guidance to GT masks).")
     p.add_argument("data_path", help="RedMeat dataset root containing all_images.csv")
     p.add_argument("gt_path", help="GT mask root (expects class_image flat naming by default)")
     p.add_argument("--seed", type=int, default=SEED)
@@ -522,9 +543,9 @@ def main():
     p.add_argument("--lr2-mult", type=float, default=lr2_mult)
     p.add_argument("--num-epochs", type=int, default=num_epochs)
     p.add_argument("--checkpoint-dir", default=checkpoint_dir)
-    p.add_argument("--model-name", choices=["resnet50", "clip_rn50"], default="resnet50")
+    p.add_argument("--model-name", choices=["resnet50", "clip_rn50", "mobilenet_v3_large"], default="resnet50")
     p.add_argument("--clip-model", default="RN50", help="CLIP visual model name when --model-name clip_rn50.")
-    p.add_argument("--tune-mode", choices=["full", "layer4_head", "linear_probe"], default="full")
+    p.add_argument("--tune-mode", choices=["full", "layer4_head", "last_blocks_head", "linear_probe"], default="full")
     p.add_argument("--pretrained", action="store_true", default=True)
     p.add_argument("--no-pretrained", action="store_false", dest="pretrained")
 

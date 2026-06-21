@@ -168,6 +168,18 @@ class CLIPRN50CAM(nn.Module):
         return logits
 
 
+def _make_mobilenet_v3_large(num_classes: int, pretrained: bool) -> nn.Module:
+    if hasattr(models, "MobileNet_V3_Large_Weights"):
+        weights = models.MobileNet_V3_Large_Weights.DEFAULT if pretrained else None
+        model = models.mobilenet_v3_large(weights=weights)
+    else:
+        model = models.mobilenet_v3_large(pretrained=pretrained)
+    if not isinstance(model.classifier, nn.Sequential) or not isinstance(model.classifier[-1], nn.Linear):
+        raise TypeError("Expected torchvision MobileNetV3-Large classifier to end with nn.Linear.")
+    model.classifier[-1] = nn.Linear(model.classifier[-1].in_features, num_classes)
+    return model
+
+
 def make_model(model_name: str, num_classes: int, pretrained: bool, clip_model: str = "RN50"):
     if model_name == "resnet50":
         model = models.resnet50(pretrained=pretrained)
@@ -179,6 +191,8 @@ def make_model(model_name: str, num_classes: int, pretrained: bool, clip_model: 
         return model
     if model_name == "clip_rn50":
         return CLIPRN50CAM(num_classes=num_classes, clip_model_name=clip_model, pretrained=pretrained)
+    if model_name == "mobilenet_v3_large":
+        return _make_mobilenet_v3_large(num_classes=num_classes, pretrained=pretrained)
     raise ValueError(f"Unsupported model_name: {model_name}")
 
 
@@ -186,7 +200,8 @@ def configure_tune_mode(model: nn.Module, tune_mode: str) -> None:
     """
     Configure trainable parameters:
     - full: train everything
-    - layer4_head: train layer4 + classifier/fc only
+    - layer4_head: train layer4/last MobileNet feature blocks + classifier/fc only
+    - last_blocks_head: train final feature blocks + classifier/fc only
     - linear_probe: train classifier/fc only
     """
     mode = str(tune_mode).strip().lower()
@@ -212,12 +227,19 @@ def configure_tune_mode(model: nn.Module, tune_mode: str) -> None:
     if mode == "linear_probe":
         return
 
-    if mode == "layer4_head":
-        if not hasattr(model, "layer4"):
-            raise AttributeError(f"Model does not expose `.layer4`; cannot apply tune_mode={mode}")
-        for p in model.layer4.parameters():
-            p.requires_grad = True
-        return
+    if mode in {"layer4_head", "last_blocks_head"}:
+        if hasattr(model, "layer4"):
+            for p in model.layer4.parameters():
+                p.requires_grad = True
+            return
+        if hasattr(model, "features") and isinstance(model.features, nn.Sequential):
+            for block in model.features[-3:]:
+                for p in block.parameters():
+                    p.requires_grad = True
+            return
+        raise AttributeError(
+            f"Model does not expose `.layer4` or MobileNet-style `.features`; cannot apply tune_mode={mode}"
+        )
 
     raise ValueError(f"Unsupported tune_mode: {tune_mode}")
 
@@ -511,9 +533,9 @@ def parse_args():
     p = argparse.ArgumentParser(description="Vanilla RedMeat CNN trainer (no guidance loss).")
     p.add_argument("data_path", help="RedMeat dataset root containing all_images.csv")
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--model", choices=["resnet50", "resnet18", "clip_rn50"], default="resnet50")
+    p.add_argument("--model", choices=["resnet50", "resnet18", "clip_rn50", "mobilenet_v3_large"], default="resnet50")
     p.add_argument("--clip-model", default="RN50", help="Used when --model clip_rn50.")
-    p.add_argument("--tune-mode", choices=["full", "layer4_head", "linear_probe"], default="full")
+    p.add_argument("--tune-mode", choices=["full", "layer4_head", "last_blocks_head", "linear_probe"], default="full")
     p.add_argument("--pretrained", action="store_true", default=True)
     p.add_argument("--no-pretrained", action="store_false", dest="pretrained")
     p.add_argument("--batch-size", type=int, default=96)

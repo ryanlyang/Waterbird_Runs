@@ -302,9 +302,9 @@ def main():
             "Note: test-based objectives are for diagnostics only and leak test information into tuning."
         ),
     )
-    p.add_argument("--model-name", choices=["resnet50", "clip_rn50"], default="resnet50")
+    p.add_argument("--model-name", choices=["resnet50", "clip_rn50", "mobilenet_v3_large"], default="resnet50")
     p.add_argument("--clip-model", default="RN50", help="Used when --model-name clip_rn50.")
-    p.add_argument("--tune-mode", choices=["full", "layer4_head", "linear_probe"], default="full")
+    p.add_argument("--tune-mode", choices=["full", "layer4_head", "last_blocks_head", "linear_probe"], default="full")
     p.add_argument("--pretrained", action="store_true", default=True)
     p.add_argument("--no-pretrained", action="store_false", dest="pretrained")
 

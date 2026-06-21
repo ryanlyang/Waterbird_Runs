@@ -92,7 +92,12 @@ def run_trial(trial_id, args, rng, sampler_name):
     rgw.lr2_mult = lr2_mult
     rgw.SEED = args.seed
 
-    run_args = SimpleNamespace(data_path=args.data_path, gt_path=args.gt_path)
+    run_args = SimpleNamespace(
+        data_path=args.data_path,
+        gt_path=args.gt_path,
+        model_name=args.model_name,
+        pretrained=args.pretrained,
+    )
     best_balanced_val, test_acc, per_group, worst_group, ckpt = rgw.run_single(
         run_args, attn_epoch, kl_lambda, kl_incr
     )
@@ -134,6 +139,9 @@ def main():
     parser.add_argument("--lr2-mult-min", type=float, default=1e-1)
     parser.add_argument("--lr2-mult-max", type=float, default=3.0)
     parser.add_argument("--sampler", choices=["tpe", "random"], default="tpe")
+    parser.add_argument("--model-name", choices=["resnet50", "mobilenet_v3_large"], default="resnet50")
+    parser.add_argument("--pretrained", action="store_true", default=True)
+    parser.add_argument("--no-pretrained", action="store_false", dest="pretrained")
     parser.add_argument(
         "--resume-csv",
         default=None,
