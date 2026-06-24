@@ -117,6 +117,8 @@ def make_redmeat_cam_model(
         return base.make_cam_model(num_classes, model_name="resnet50", pretrained=pretrained)
     if model_name == "clip_rn50":
         return CLIPRN50CAM(num_classes=num_classes, clip_model_name=clip_model, pretrained=pretrained)
+    if model_name == "mobilenet_v2":
+        return base.make_cam_model(num_classes, model_name="mobilenet_v2", pretrained=pretrained)
     if model_name == "mobilenet_v3_large":
         return base.make_cam_model(num_classes, model_name="mobilenet_v3_large", pretrained=pretrained)
     raise ValueError(f"Unsupported model_name: {model_name}")
@@ -543,7 +545,7 @@ def main():
     p.add_argument("--lr2-mult", type=float, default=lr2_mult)
     p.add_argument("--num-epochs", type=int, default=num_epochs)
     p.add_argument("--checkpoint-dir", default=checkpoint_dir)
-    p.add_argument("--model-name", choices=["resnet50", "clip_rn50", "mobilenet_v3_large"], default="resnet50")
+    p.add_argument("--model-name", choices=["resnet50", "clip_rn50", "mobilenet_v2", "mobilenet_v3_large"], default="resnet50")
     p.add_argument("--clip-model", default="RN50", help="CLIP visual model name when --model-name clip_rn50.")
     p.add_argument("--tune-mode", choices=["full", "layer4_head", "last_blocks_head", "linear_probe"], default="full")
     p.add_argument("--pretrained", action="store_true", default=True)

@@ -22,6 +22,14 @@ def _mobilenet_v3_large(pretrained: bool) -> nn.Module:
     return models.mobilenet_v3_large(pretrained=pretrained)
 
 
+def _mobilenet_v2(pretrained: bool) -> nn.Module:
+    """Build MobileNetV2 across old and new torchvision APIs."""
+    if hasattr(models, "MobileNet_V2_Weights"):
+        weights = models.MobileNet_V2_Weights.DEFAULT if pretrained else None
+        return models.mobilenet_v2(weights=weights)
+    return models.mobilenet_v2(pretrained=pretrained)
+
+
 def _resnet50(pretrained: bool) -> nn.Module:
     """Build ResNet-50 across old and new torchvision APIs."""
     if hasattr(models, "ResNet50_Weights"):
@@ -121,6 +129,34 @@ class MobileNetV3CAM(CAMBackbone):
         return logits, cam_features
 
 
+class MobileNetV2CAM(CAMBackbone):
+    """Torchvision MobileNetV2 wrapper with an exact GAP + linear CAM head."""
+
+    def __init__(self, num_classes: int, pretrained: bool = True):
+        super().__init__()
+        self.base = _mobilenet_v2(pretrained=pretrained)
+        if not hasattr(self.base, "features"):
+            raise TypeError("Expected torchvision MobileNetV2 to expose `.features`.")
+        if not isinstance(self.base.classifier, nn.Sequential):
+            raise TypeError("Expected torchvision MobileNetV2 classifier to be nn.Sequential.")
+        if not isinstance(self.base.classifier[-1], nn.Linear):
+            raise TypeError("Expected final MobileNetV2 classifier module to be nn.Linear.")
+
+        in_features = self.base.classifier[-1].in_features
+        self.classifier = nn.Linear(in_features, num_classes)
+        # Keep classifier simple and dropout-free so logits and CAMs use the same
+        # spatial feature channels: features -> GAP -> Linear.
+        self.base.classifier = self.classifier
+        self.features = None
+
+    def forward(self, images: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        feature_maps = self.base.features(images)
+        self.features = feature_maps
+        pooled = nn.functional.adaptive_avg_pool2d(feature_maps, 1).flatten(1)
+        logits = self.classifier(pooled)
+        return logits, feature_maps
+
+
 def make_cam_backbone(
     num_classes: int,
     model_name: str = "resnet50",
@@ -129,6 +165,8 @@ def make_cam_backbone(
     name = str(model_name).strip().lower()
     if name == "resnet50":
         return ResNet50CAM(num_classes=num_classes, pretrained=pretrained)
+    if name in {"mobilenet_v2", "mobilenetv2"}:
+        return MobileNetV2CAM(num_classes=num_classes, pretrained=pretrained)
     if name in {"mobilenet_v3_large", "mobilenetv3_large", "mobilenet"}:
         return MobileNetV3CAM(num_classes=num_classes, pretrained=pretrained)
     raise ValueError(f"Unsupported CAM backbone: {model_name}")

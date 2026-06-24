@@ -135,7 +135,7 @@ def main():
     p.add_argument("--train-seed", type=int, default=0, help="Fixed training seed during hyperparameter search")
     p.add_argument("--sampler", choices=["tpe", "random"], default="tpe")
 
-    p.add_argument("--model", choices=["resnet50", "resnet18", "clip_rn50", "mobilenet_v3_large"], default="resnet50")
+    p.add_argument("--model", choices=["resnet50", "resnet18", "clip_rn50", "mobilenet_v2", "mobilenet_v3_large"], default="resnet50")
     p.add_argument("--clip-model", default="RN50", help="Used when --model clip_rn50.")
     p.add_argument("--tune-mode", choices=["full", "layer4_head", "last_blocks_head", "linear_probe"], default="full")
     p.add_argument("--pretrained", action="store_true", default=True)

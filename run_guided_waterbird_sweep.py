@@ -139,7 +139,7 @@ def main():
     parser.add_argument("--lr2-mult-min", type=float, default=1e-1)
     parser.add_argument("--lr2-mult-max", type=float, default=3.0)
     parser.add_argument("--sampler", choices=["tpe", "random"], default="tpe")
-    parser.add_argument("--model-name", choices=["resnet50", "mobilenet_v3_large"], default="resnet50")
+    parser.add_argument("--model-name", choices=["resnet50", "mobilenet_v2", "mobilenet_v3_large"], default="resnet50")
     parser.add_argument("--pretrained", action="store_true", default=True)
     parser.add_argument("--no-pretrained", action="store_false", dest="pretrained")
     parser.add_argument(

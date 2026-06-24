@@ -166,6 +166,22 @@ def _make_mobilenet_v3_large(num_classes: int, pretrained: bool) -> nn.Module:
     return model
 
 
+def _make_mobilenet_v2(num_classes: int, pretrained: bool) -> nn.Module:
+    if hasattr(models, "MobileNet_V2_Weights"):
+        weights = models.MobileNet_V2_Weights.DEFAULT if pretrained else None
+        model = models.mobilenet_v2(weights=weights)
+    else:
+        model = models.mobilenet_v2(pretrained=pretrained)
+    if not hasattr(model, "features"):
+        raise TypeError("Expected torchvision MobileNetV2 to expose `.features`.")
+    if not isinstance(model.classifier, nn.Sequential) or not isinstance(model.classifier[-1], nn.Linear):
+        raise TypeError("Expected torchvision MobileNetV2 classifier to end with nn.Linear.")
+    in_features = model.classifier[-1].in_features
+    # Dropout-free GAP -> Linear head, matching the guided MobileNetV2 CAM wrapper.
+    model.classifier = nn.Linear(in_features, num_classes)
+    return model
+
+
 def make_model(model_name: str, num_classes: int, pretrained: bool, clip_model: str = "RN50"):
     if model_name == "resnet50":
         model = models.resnet50(pretrained=pretrained)
@@ -177,6 +193,8 @@ def make_model(model_name: str, num_classes: int, pretrained: bool, clip_model: 
         return model
     if model_name == "clip_rn50":
         return CLIPRN50CAM(num_classes=num_classes, clip_model_name=clip_model, pretrained=pretrained)
+    if model_name == "mobilenet_v2":
+        return _make_mobilenet_v2(num_classes=num_classes, pretrained=pretrained)
     if model_name == "mobilenet_v3_large":
         return _make_mobilenet_v3_large(num_classes=num_classes, pretrained=pretrained)
     raise ValueError(f"Unsupported model_name: {model_name}")
@@ -512,7 +530,7 @@ def parse_args():
     )
     p.add_argument("data_path", help="Waterbirds dataset root (expects metadata.csv or train/test folders)")
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--model", choices=["resnet50", "resnet18", "clip_rn50", "mobilenet_v3_large"], default="resnet50")
+    p.add_argument("--model", choices=["resnet50", "resnet18", "clip_rn50", "mobilenet_v2", "mobilenet_v3_large"], default="resnet50")
     p.add_argument("--clip-model", default="RN50", help="Used when --model clip_rn50.")
     p.add_argument("--tune-mode", choices=["full", "layer4_head", "last_blocks_head", "linear_probe"], default="full")
     p.add_argument("--pretrained", action="store_true", default=True)

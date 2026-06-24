@@ -173,6 +173,10 @@ def make_cam_model(num_classes, model_name="resnet50", pretrained=True):
         return CAMWrap(base)
     if model_name == "resnet50":
         return ResNetCAM(num_classes, pretrained=pretrained)
+    if model_name == "mobilenet_v2":
+        from GALS.models.cam_backbones import MobileNetV2CAM
+
+        return MobileNetV2CAM(num_classes=num_classes, pretrained=pretrained)
     if model_name == "mobilenet_v3_large":
         from GALS.models.cam_backbones import MobileNetV3CAM
 
@@ -294,6 +298,77 @@ def _get_param_groups(model, base_lr, classifier_lr):
     return param_groups
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _env_int(name: str, default: int, minimum: int = 1) -> int:
+    try:
+        return max(minimum, int(os.environ.get(name, default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _new_cam_diag_state():
+    return {
+        "num_values": 0,
+        "num_samples": 0,
+        "sum": 0.0,
+        "min": None,
+        "max": None,
+        "spatial_std_sum": 0.0,
+        "flat_count": 0,
+    }
+
+
+def _update_cam_diag_state(state, cams: torch.Tensor, flat_eps: float) -> None:
+    with torch.no_grad():
+        flat = cams.detach().float().flatten(1)
+        if flat.numel() == 0:
+            return
+        sample_min = flat.min(dim=1).values
+        sample_max = flat.max(dim=1).values
+        sample_range = sample_max - sample_min
+        sample_std = flat.std(dim=1, unbiased=False)
+
+        state["num_values"] += int(flat.numel())
+        state["num_samples"] += int(flat.size(0))
+        state["sum"] += float(flat.sum().item())
+        state["spatial_std_sum"] += float(sample_std.sum().item())
+        state["flat_count"] += int((sample_range < flat_eps).sum().item())
+
+        batch_min = float(sample_min.min().item())
+        batch_max = float(sample_max.max().item())
+        state["min"] = batch_min if state["min"] is None else min(state["min"], batch_min)
+        state["max"] = batch_max if state["max"] is None else max(state["max"], batch_max)
+
+
+def _format_cam_diag(phase: str, state, flat_eps: float) -> str:
+    num_values = max(int(state["num_values"]), 1)
+    num_samples = max(int(state["num_samples"]), 1)
+    mean = float(state["sum"]) / num_values
+    spatial_std_mean = float(state["spatial_std_sum"]) / num_samples
+    flat_frac = float(state["flat_count"]) / num_samples
+    cam_min = 0.0 if state["min"] is None else float(state["min"])
+    cam_max = 0.0 if state["max"] is None else float(state["max"])
+    return (
+        f"[CAM_DIAG] phase={phase} samples={state['num_samples']} "
+        f"cam_min={cam_min:.6g} cam_mean={mean:.6g} cam_max={cam_max:.6g} "
+        f"spatial_std_mean={spatial_std_mean:.6g} flat_frac={flat_frac:.4f} "
+        f"flat_eps={flat_eps:.1e}"
+    )
+
+
 def train_model(model, dataloaders, dataset_sizes,
                 attention_epoch, kl_lambda_start, num_epochs,
                 base_lr, classifier_lr, lr2_mult, kl_incr, use_attention, num_classes):
@@ -307,6 +382,15 @@ def train_model(model, dataloaders, dataset_sizes,
     sch = None
 
     kl_lambda_real = kl_lambda_start
+    cam_diagnostics = _env_flag("GUIDED_CAM_DIAGNOSTICS", default=False)
+    cam_diag_every = _env_int("GUIDED_CAM_DIAGNOSTICS_EVERY", default=1, minimum=1)
+    cam_flat_eps = _env_float("GUIDED_CAM_FLAT_EPS", default=1e-6)
+    if cam_diagnostics:
+        print(
+            f"[CAM_DIAG] enabled every {cam_diag_every} epoch(s); "
+            f"flat_eps={cam_flat_eps:.1e}",
+            flush=True,
+        )
 
     for epoch in range(num_epochs):
         # restart at attention_epoch
@@ -337,6 +421,7 @@ def train_model(model, dataloaders, dataset_sizes,
             running_attn_loss = 0.0
             class_correct = np.zeros(num_classes, dtype=np.int64)
             class_total = np.zeros(num_classes, dtype=np.int64)
+            diag_state = _new_cam_diag_state() if cam_diagnostics else None
 
             for batch in dataloaders[phase]:
                 if len(batch) == 4:
@@ -365,6 +450,8 @@ def train_model(model, dataloaders, dataset_sizes,
                         weights = model.classifier.weight[labels]
                         cams = torch.einsum('bc,bchw->bhw', weights, feats)
                         cams = torch.relu(cams)
+                        if diag_state is not None:
+                            _update_cam_diag_state(diag_state, cams, cam_flat_eps)
 
                         flat = cams.view(cams.size(0), -1)
                         mn, _ = flat.min(dim=1, keepdim=True)
@@ -409,6 +496,13 @@ def train_model(model, dataloaders, dataset_sizes,
             epoch_acc = running_corrects.double() / dataset_sizes[phase]
             epoch_attn_loss = running_attn_loss / dataset_sizes[phase]
             print(f"{phase} Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f} Attn_Loss: {epoch_attn_loss:.4f}")
+            if (
+                cam_diagnostics
+                and diag_state is not None
+                and diag_state["num_samples"] > 0
+                and ((epoch + 1) % cam_diag_every == 0)
+            ):
+                print(_format_cam_diag(phase, diag_state, cam_flat_eps), flush=True)
 
             if phase == 'val':
                 class_acc = class_correct / np.maximum(class_total, 1)
@@ -627,7 +721,7 @@ def run_single(args, attn_epoch, kl_value, kl_increment=None):
 
 
 def main():
-    global SEED, base_lr, classifier_lr, lr2_mult
+    global SEED, base_lr, classifier_lr, lr2_mult, num_epochs
     parser = argparse.ArgumentParser()
     parser.add_argument('data_path', help='Dataset root (expects metadata.csv or train/ and test/ subdirs)')
     parser.add_argument('gt_path', help='Folder with ground-truth mask PNGs (for train only)')
@@ -640,7 +734,9 @@ def main():
     parser.add_argument('--classifier_lr', type=float, default=classifier_lr, help='Classifier learning rate')
     parser.add_argument('--lr2_mult', type=float, default=lr2_mult,
                         help='Multiplier applied to both base_lr and classifier_lr after attention_epoch restart')
-    parser.add_argument('--model-name', choices=['resnet50', 'mobilenet_v3_large'], default='resnet50',
+    parser.add_argument('--num-epochs', type=int, default=num_epochs,
+                        help='Number of training epochs; defaults to the full Waterbirds setting')
+    parser.add_argument('--model-name', choices=['resnet50', 'mobilenet_v2', 'mobilenet_v3_large'], default='resnet50',
                         help='Student CNN backbone')
     parser.add_argument('--pretrained', action='store_true', default=True)
     parser.add_argument('--no-pretrained', action='store_false', dest='pretrained')
@@ -652,6 +748,7 @@ def main():
     base_lr = args.base_lr
     classifier_lr = args.classifier_lr
     lr2_mult = args.lr2_mult
+    num_epochs = args.num_epochs
 
     if not args.sweep:
         run_single(args, args.attention_epoch, args.kl_lambda, args.kl_increment)
