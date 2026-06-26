@@ -56,8 +56,13 @@ GUIDED_MODEL_NAME=${GUIDED_MODEL_NAME:-mobilenet_v2}
 GUIDED_TUNE_MODE=${GUIDED_TUNE_MODE:-full}
 GUIDED_CLIP_MODEL=${GUIDED_CLIP_MODEL:-RN50}
 GUIDED_PRETRAINED=${GUIDED_PRETRAINED:-1}
+RESUME_CSV=${RESUME_CSV:-}
 
-SWEEP_OUT=${SWEEP_OUT:-$LOG_DIR/guided_redmeat_mobilenetv2_sweep_${SLURM_JOB_ID}.csv}
+if [[ -n "$RESUME_CSV" && -z "${SWEEP_OUT:-}" ]]; then
+  SWEEP_OUT="$RESUME_CSV"
+else
+  SWEEP_OUT=${SWEEP_OUT:-$LOG_DIR/guided_redmeat_mobilenetv2_sweep_${SLURM_JOB_ID}.csv}
+fi
 POST_OUT=${POST_OUT:-$LOG_DIR/guided_redmeat_mobilenetv2_best5_${SLURM_JOB_ID}.csv}
 
 export CUBLAS_WORKSPACE_CONFIG=:4096:8
@@ -74,6 +79,14 @@ fi
 if [[ ! -d "$PRIMARY_GT_ROOT" ]]; then
   echo "[ERROR] Missing PRIMARY_GT_ROOT: $PRIMARY_GT_ROOT" >&2
   exit 2
+fi
+RESUME_ARGS=()
+if [[ -n "$RESUME_CSV" ]]; then
+  if [[ ! -f "$RESUME_CSV" ]]; then
+    echo "[ERROR] Missing RESUME_CSV: $RESUME_CSV" >&2
+    exit 2
+  fi
+  RESUME_ARGS=(--resume-csv "$RESUME_CSV")
 fi
 
 python -c "import optuna" 2>/dev/null || { echo "[INFO] Installing optuna..."; pip install -q optuna; }
@@ -93,6 +106,7 @@ echo "Data: $DATASET_ROOT"
 echo "Primary GT masks: $PRIMARY_GT_ROOT"
 echo "Trials: $N_TRIALS (sampler=$SAMPLER sweep_seed=$SWEEP_SEED)"
 echo "Guided backbone: $GUIDED_MODEL_NAME tune_mode=$GUIDED_TUNE_MODE pretrained=$GUIDED_PRETRAINED"
+if [[ -n "$RESUME_CSV" ]]; then echo "Resume CSV: $RESUME_CSV"; fi
 echo "Output CSV: $SWEEP_OUT"
 echo "Post seeds: $POST_SEEDS (start=$POST_SEED_START)"
 echo "Post output CSV: $POST_OUT"
@@ -113,10 +127,10 @@ srun --unbuffered python -u RedMeat_Runs/run_guided_redmeat_sweep.py \
   --seed "$SWEEP_SEED" \
   --sampler "$SAMPLER" \
   --num-epochs 150 \
+  "${RESUME_ARGS[@]}" \
   --output-csv "$SWEEP_OUT" \
   --post-seeds "$POST_SEEDS" \
   --post-seed-start "$POST_SEED_START" \
   --post-output-csv "$POST_OUT" \
   "${MODEL_ARGS[@]}" \
   "${ALT_ARGS[@]}"
-

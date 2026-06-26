@@ -42,8 +42,13 @@ N_TRIALS=${N_TRIALS:-50}
 SWEEP_SEED=${SWEEP_SEED:-0}
 SAMPLER=${SAMPLER:-tpe}
 SEED_LIST=${SEED_LIST:-"0 1 2 3 4"}
+RESUME_CSV=${RESUME_CSV:-}
 
-SWEEP_OUT=${SWEEP_OUT:-$LOG_DIR/guided100_mobilenetv2_sweep_${SLURM_JOB_ID}.csv}
+if [[ -n "$RESUME_CSV" && -z "${SWEEP_OUT:-}" ]]; then
+  SWEEP_OUT="$RESUME_CSV"
+else
+  SWEEP_OUT=${SWEEP_OUT:-$LOG_DIR/guided100_mobilenetv2_sweep_${SLURM_JOB_ID}.csv}
+fi
 SEED_SWEEP_OUT=${SEED_SWEEP_OUT:-$LOG_DIR/guided100_mobilenetv2_best5_${SLURM_JOB_ID}.csv}
 
 cd "$REPO_ROOT"
@@ -57,6 +62,14 @@ if [[ ! -d "$SWEEP_GT_ROOT" ]]; then
   echo "[ERROR] Missing SWEEP_GT_ROOT: $SWEEP_GT_ROOT" >&2
   exit 2
 fi
+RESUME_ARGS=()
+if [[ -n "$RESUME_CSV" ]]; then
+  if [[ ! -f "$RESUME_CSV" ]]; then
+    echo "[ERROR] Missing RESUME_CSV: $RESUME_CSV" >&2
+    exit 2
+  fi
+  RESUME_ARGS=(--resume-csv "$RESUME_CSV")
+fi
 
 python -c "import optuna" 2>/dev/null || { echo "[INFO] Installing optuna..."; pip install -q optuna; }
 
@@ -66,6 +79,7 @@ echo "Data: $DATA_ROOT"
 echo "GT masks: $SWEEP_GT_ROOT"
 echo "Backbone: mobilenet_v2 pretrained=1"
 echo "Trials: $N_TRIALS (sampler=$SAMPLER sweep_seed=$SWEEP_SEED)"
+if [[ -n "$RESUME_CSV" ]]; then echo "Resume CSV: $RESUME_CSV"; fi
 echo "Output CSV: $SWEEP_OUT"
 echo "Best5 CSV: $SEED_SWEEP_OUT"
 echo "SAVE_CHECKPOINTS=$SAVE_CHECKPOINTS GUIDED_NUM_WORKERS=$GUIDED_NUM_WORKERS"
@@ -79,6 +93,7 @@ srun --unbuffered python -u run_guided_waterbird_sweep.py \
   --sampler "$SAMPLER" \
   --model-name mobilenet_v2 \
   --pretrained \
+  "${RESUME_ARGS[@]}" \
   --output-csv "$SWEEP_OUT"
 
 if [[ ! -f "$SWEEP_OUT" ]]; then
@@ -192,4 +207,3 @@ PY
 done
 
 echo "[DONE] Waterbirds-100 guided MobileNetV2 sweep + seed reruns complete."
-
