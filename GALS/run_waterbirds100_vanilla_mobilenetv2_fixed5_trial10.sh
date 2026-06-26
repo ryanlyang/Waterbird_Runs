@@ -1,5 +1,5 @@
 #!/bin/bash -l
-# Fixed five-seed rerun for the best Waterbirds-95 vanilla MobileNetV2 trial.
+# Fixed five-seed rerun for the best Waterbirds-100 vanilla MobileNetV2 trial.
 
 #SBATCH --account=reu-aisocial
 #SBATCH --partition=tier3
@@ -8,8 +8,8 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
-#SBATCH --output=/home/ryreu/guided_cnn/logsWaterbird/vanilla95_mobilenetv2_fixed5_trial7_%j.out
-#SBATCH --error=/home/ryreu/guided_cnn/logsWaterbird/vanilla95_mobilenetv2_fixed5_trial7_%j.err
+#SBATCH --output=/home/ryreu/guided_cnn/logsWaterbird/vanilla100_mobilenetv2_fixed5_trial10_%j.out
+#SBATCH --error=/home/ryreu/guided_cnn/logsWaterbird/vanilla100_mobilenetv2_fixed5_trial10_%j.err
 #SBATCH --signal=TERM@120
 
 set -Eeuo pipefail
@@ -32,20 +32,20 @@ export NUMEXPR_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export PYTHONNOUSERSITE=1
 
 REPO_ROOT=/home/ryreu/guided_cnn/waterbirds/Waterbird_Runs
-DATA_PATH=/home/ryreu/guided_cnn/waterbirds/waterbird_complete95_forest2water2
+DATA_PATH=/home/ryreu/guided_cnn/waterbirds/waterbird_1.0_forest2water2
 
 SEED_LIST=${SEED_LIST:-"0 1 2 3 4"}
-BASE_LR=${BASE_LR:-0.009037817298961128}
-CLASSIFIER_LR=${CLASSIFIER_LR:-0.0005093288991452603}
-MOMENTUM=${MOMENTUM:-0.9280529176286455}
+BASE_LR=${BASE_LR:-0.03757772653269032}
+CLASSIFIER_LR=${CLASSIFIER_LR:-9.265434364396105e-05}
+MOMENTUM=${MOMENTUM:-0.8808375186178569}
 WEIGHT_DECAY=${WEIGHT_DECAY:-1e-5}
 NESTEROV=${NESTEROV:-0}
 NUM_EPOCHS=${NUM_EPOCHS:-200}
 NUM_WORKERS=${NUM_WORKERS:-4}
 BATCH_SIZE=${BATCH_SIZE:-96}
 
-OUT_CSV=${OUT_CSV:-$LOG_DIR/vanilla95_mobilenetv2_fixed5_trial7_${SLURM_JOB_ID}.csv}
-SUMMARY_CSV=${SUMMARY_CSV:-$LOG_DIR/vanilla95_mobilenetv2_fixed5_trial7_summary_${SLURM_JOB_ID}.csv}
+OUT_CSV=${OUT_CSV:-$LOG_DIR/vanilla100_mobilenetv2_fixed5_trial10_${SLURM_JOB_ID}.csv}
+SUMMARY_CSV=${SUMMARY_CSV:-$LOG_DIR/vanilla100_mobilenetv2_fixed5_trial10_summary_${SLURM_JOB_ID}.csv}
 CKPT_DIR=${CKPT_DIR:-$REPO_ROOT/Vanilla_MobileNetV2_Checkpoints}
 export BASE_LR CLASSIFIER_LR MOMENTUM WEIGHT_DECAY NESTEROV NUM_EPOCHS NUM_WORKERS BATCH_SIZE CKPT_DIR
 
@@ -61,7 +61,7 @@ echo "[$(date)] Host: $(hostname)"
 echo "Repo: $REPO_ROOT"
 echo "Data: $DATA_PATH"
 echo "Backbone: mobilenet_v2 pretrained=1 tune_mode=full"
-echo "Fixed hyperparams from vanilla WB95 MobileNetV2 trial 7:"
+echo "Fixed hyperparams from vanilla WB100 MobileNetV2 trial 10:"
 echo "  base_lr=$BASE_LR"
 echo "  classifier_lr=$CLASSIFIER_LR"
 echo "  momentum=$MOMENTUM"
