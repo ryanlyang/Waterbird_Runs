@@ -13,7 +13,7 @@
 set -Eeuo pipefail
 
 REPO_ROOT="${REPO_ROOT:-/home/ryreu/guided_cnn/waterbirds/Waterbird_Runs/GALS}"
-CONDA_ENV="${CONDA_ENV:-learntolook}"
+CONDA_ENV="${CONDA_ENV:-gals_a100}"
 LOG_DIR="${LOG_DIR:-/home/ryreu/guided_cnn/logsMNIST}"
 
 DATA_PATH="${DATA_PATH:-/home/ryreu/guided_cnn/MNIST_AGAIN/MakeMNIST/data/DecoyMNIST_png}"
