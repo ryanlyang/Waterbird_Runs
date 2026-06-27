@@ -5,6 +5,7 @@ Compute Pointing Game accuracy on Waterbirds for multiple trained methods.
 Supported methods:
 - guided
 - vanilla
+- elrep
 - gals (binary single-logit GALS model from this repo)
 - afr (AFR stage-1 model, optional stage-2 last-layer override)
 
@@ -591,7 +592,7 @@ def evaluate_dataset(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Pointing Game evaluator for Waterbirds 95/100 across vanilla, GALS, guided, AFR."
+        description="Pointing Game evaluator for Waterbirds 95/100 across vanilla, ElRep, GALS, guided, AFR."
     )
     parser.add_argument(
         "--datasets",
@@ -622,6 +623,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--guided100-ckpt", default="")
     parser.add_argument("--vanilla95-ckpt", default="")
     parser.add_argument("--vanilla100-ckpt", default="")
+    parser.add_argument("--elrep95-ckpt", default="")
+    parser.add_argument("--elrep100-ckpt", default="")
     parser.add_argument("--gals95-ckpt", default="")
     parser.add_argument("--gals100-ckpt", default="")
 
@@ -656,12 +659,14 @@ def _build_runners_for_dataset(
     if dataset_tag == "95":
         guided_ckpt = args.guided95_ckpt
         vanilla_ckpt = args.vanilla95_ckpt
+        elrep_ckpt = args.elrep95_ckpt
         gals_ckpt = args.gals95_ckpt
         afr_stage1_ckpt = args.afr95_stage1_ckpt
         afr_last_layer_ckpt = args.afr95_last_layer_ckpt
     else:
         guided_ckpt = args.guided100_ckpt
         vanilla_ckpt = args.vanilla100_ckpt
+        elrep_ckpt = args.elrep100_ckpt
         gals_ckpt = args.gals100_ckpt
         afr_stage1_ckpt = args.afr100_stage1_ckpt
         afr_last_layer_ckpt = args.afr100_last_layer_ckpt
@@ -679,6 +684,13 @@ def _build_runners_for_dataset(
             runners["vanilla"] = VanillaRunner(p, num_classes=num_classes, device=device)
         else:
             print(f"[WARN] Missing vanilla checkpoint for dataset {dataset_tag}; skipping vanilla.", flush=True)
+
+    if "elrep" in methods:
+        p = _resolve_ckpt(elrep_ckpt)
+        if p is not None:
+            runners["elrep"] = VanillaRunner(p, num_classes=num_classes, device=device)
+        else:
+            print(f"[WARN] Missing ElRep checkpoint for dataset {dataset_tag}; skipping elrep.", flush=True)
 
     if "gals" in methods:
         p = _resolve_ckpt(gals_ckpt)
