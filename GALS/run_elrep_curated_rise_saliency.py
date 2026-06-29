@@ -138,7 +138,7 @@ def safe_token(text: str) -> str:
 
 def _normalize_text_token(text: str) -> str:
     s = str(text).strip().lower().replace("\\", "/")
-    s = re.sub(r"\.[a-z0-9]+$", "", s)
+    s = re.sub(r"\.(jpg|jpeg|png)$", "", s)
     s = s.replace(".", "_")
     s = s.replace("/", "_")
     s = re.sub(r"_+", "_", s).strip("_")

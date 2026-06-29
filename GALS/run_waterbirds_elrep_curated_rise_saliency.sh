@@ -87,6 +87,7 @@ srun --unbuffered python -u run_elrep_curated_rise_saliency.py \
   --split "$SPLIT" \
   --target-class "$TARGET_CLASS" \
   --device cuda:0 \
+  --allow-missing \
   --rise-num-masks "$RISE_NUM_MASKS" \
   --rise-grid-size "$RISE_GRID_SIZE" \
   --rise-p1 "$RISE_P1" \
