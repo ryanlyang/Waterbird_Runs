@@ -139,6 +139,7 @@ def safe_token(text: str) -> str:
 def _normalize_text_token(text: str) -> str:
     s = str(text).strip().lower().replace("\\", "/")
     s = re.sub(r"\.[a-z0-9]+$", "", s)
+    s = s.replace(".", "_")
     s = s.replace("/", "_")
     s = re.sub(r"_+", "_", s).strip("_")
     s = re.sub(r"^\d+_", "", s)
@@ -178,6 +179,18 @@ def _resolve_curated_indices(paths: Sequence[Path], requested_tokens: Sequence[s
                 matched[token] = idx
 
     return [matched[t] for t in requested_tokens if t in matched], [t for t in requested_tokens if t not in matched]
+
+
+def _resolve_token_from_paths(paths: Sequence[Path], token: str) -> Optional[int]:
+    wanted = _name_variants(token)
+    for idx, path in enumerate(paths):
+        variants = _name_variants(str(path))
+        variants.update(_name_variants(path.name))
+        if path.parent.name:
+            variants.add(f"{_normalize_text_token(path.parent.name)}_{_normalize_text_token(path.stem)}")
+        if variants.intersection(wanted):
+            return idx
+    return None
 
 
 def normalize_map(arr: np.ndarray) -> np.ndarray:
@@ -437,29 +450,77 @@ def _split_value_for_waterbirds(split: str) -> int:
     return {"train": 0, "val": 1, "test": 2}[split]
 
 
+def _resolve_waterbird_token_filesystem(
+    token: str,
+    data_path: Path,
+    label_lookup: Optional[Dict[str, int]] = None,
+) -> Optional[CuratedEntry]:
+    roots = [data_path / "images", data_path]
+    wanted = _name_variants(token)
+    exts = {".jpg", ".jpeg", ".png", ".JPG", ".JPEG", ".PNG"}
+
+    for root in roots:
+        if not root.is_dir():
+            continue
+        try:
+            candidates = [p for p in root.rglob("*") if p.is_file() and p.suffix in exts]
+        except Exception:
+            continue
+        for path in candidates:
+            variants = _name_variants(str(path))
+            variants.update(_name_variants(path.name))
+            if path.parent.name:
+                variants.add(f"{_normalize_text_token(path.parent.name)}_{_normalize_text_token(path.stem)}")
+            if not variants.intersection(wanted):
+                continue
+
+            key = str(path.resolve())
+            label = label_lookup.get(key) if label_lookup is not None else None
+            if label is None:
+                # CUB Waterbirds classes 1-112 are waterbirds in the canonical split;
+                # this fallback is only used when metadata lookup fails.
+                m = re.match(r"^(\d+)", path.parent.name)
+                species_id = int(m.group(1)) if m else 0
+                label = 1 if 1 <= species_id <= 112 else 0
+            return CuratedEntry(token, path.resolve(), int(label), WATERBIRDS_CLASSES[int(label)], "filesystem")
+    return None
+
+
 def resolve_waterbirds_entries(data_path: Path, split: str, requested_tokens: Sequence[str]) -> Tuple[List[CuratedEntry], List[str]]:
     meta_path = data_path / "metadata.csv"
     if not meta_path.is_file():
         raise FileNotFoundError(f"Missing Waterbirds metadata.csv: {meta_path}")
-    df = pd.read_csv(meta_path)
-    df = df[df["split"].astype(int) == _split_value_for_waterbirds(split)].copy()
+    df_all = pd.read_csv(meta_path)
+    df = df_all[df_all["split"].astype(int) == _split_value_for_waterbirds(split)].copy()
 
     paths = [_resolve_img_path(data_path, p) for p in df["img_filename"].astype(str).tolist()]
     labels = df["y"].astype(int).tolist()
-    idxs, missing = _resolve_curated_indices(paths, requested_tokens)
+    all_paths = [_resolve_img_path(data_path, p) for p in df_all["img_filename"].astype(str).tolist()]
+    all_labels = df_all["y"].astype(int).tolist()
+    label_lookup = {str(p.resolve()): int(y) for p, y in zip(all_paths, all_labels)}
 
     entries: List[CuratedEntry] = []
-    for token, idx in zip([t for t in requested_tokens if t not in missing], idxs):
-        label = int(labels[idx])
-        entries.append(
-            CuratedEntry(
-                request_token=token,
-                image_path=paths[idx],
-                label=label,
-                class_name=WATERBIRDS_CLASSES[label],
-                source="metadata",
+    missing: List[str] = []
+    for token in requested_tokens:
+        idx = _resolve_token_from_paths(paths, token)
+        if idx is not None:
+            label = int(labels[idx])
+            entries.append(
+                CuratedEntry(
+                    request_token=token,
+                    image_path=paths[idx],
+                    label=label,
+                    class_name=WATERBIRDS_CLASSES[label],
+                    source="metadata",
+                )
             )
-        )
+            continue
+
+        fs_entry = _resolve_waterbird_token_filesystem(token, data_path, label_lookup=label_lookup)
+        if fs_entry is not None:
+            entries.append(fs_entry)
+        else:
+            missing.append(token)
     return entries, missing
 
 
